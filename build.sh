@@ -11,7 +11,7 @@ then
   exit 1
 fi
 
-sed "s/commitplaceholder/"$COMMIT"/g" version.template > ./package/verion.go
+sed "s/commitplaceholder/"$COMMIT"/g" version.template > ./package/version.go
 sed -i "s/versionplaceholder/"$VERSION"/g" ./package/version.go
 mkdir bungkus
 go build -buildmode=plugin -ldflags="-s -w" -o bungkus/terminal.so

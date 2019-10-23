@@ -15,11 +15,11 @@ then
 fi
 
 sed "s/versionplaceholder/"$WRITTENVERSION"/g" version.template > ./package/version.go
-sed -i "s/versionplaceholder/"$WRITTENVERSION"/g" ./module.toml
+sed "s/versionplaceholder/"$WRITTENVERSION"/g" module.toml.template > ./module.toml
 
 mkdir bungkus
 go build -buildmode=plugin -ldflags="-s -w" -o bungkus/terminal.so
 cp -Rvf LICENSE CHANGELOG  module.toml schema bungkus
 mv bungkus terminal
-tar zcvvf terminal-$VERSION-$COMMIT.tar.gz terminal
+tar zcvvf terminal-$WRITTENVERSION.tar.gz terminal
 rm -Rvf terminal

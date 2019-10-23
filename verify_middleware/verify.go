@@ -43,10 +43,10 @@ func MiddleFunc() gin.HandlerFunc {
 		var segments []string
 
 		log.Println(c.Request.URL.String())
-		log.Println("wii woo wii woo")
+		// log.Println("wii woo wii woo")
 		c.Set("middleware", "loaded")
 		segments = strings.Split(c.Request.URL.String(), "/")
-		log.Println(segments[3], segments[4])
+		log.Printf("\n%+v\n", segments)
 
 		if err = c.ShouldBindHeader(&h); err != nil {
 			common.ErrHandler(err)

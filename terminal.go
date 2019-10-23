@@ -90,33 +90,32 @@ func deflt(c *gin.Context) {
 	switch c.Request.Method {
 	case "POST":
 		if strings.Compare(segments[1], "") == 0 {
-			dummyResponse(c)
+			PostTerminalInsert(c)
 		} else if strings.Compare(segments[1], "login") == 0 {
-			// dummyResponse(c)
-			LoginFunc(c)
+			PostLoginFunc(c)
 		} else {
 			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
 		}
 		break
 	case "GET":
 		if strings.Compare(segments[1], "all") == 0 {
-			dummyResponse(c)
-		} else if i, e := strconv.Atoi(segments[1]); (e == nil) && (i > 0) {
-			dummyResponse(c)
+			GetTerminalAllHandler(c)
+		} else if strings.Compare(segments[1], "") != 0 {
+			GetTerminalIdHandler(c)
 		} else {
 			c.AbortWithStatusJSON(http.StatusNotAcceptable, loc.NOT_ACCEPTABLE)
 		}
 		break
 	case "PUT":
-		if i, e := strconv.Atoi(segments[1]); (e == nil) && (i > 0) {
-			dummyResponse(c)
+		if strings.Compare(segments[1], "") != 0 {
+			PutTerminalHandler(c)
 		} else {
 			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
 		}
 		break
 	case "DELETE":
-		if i, e := strconv.Atoi(segments[1]); (e == nil) && (i > 0) {
-			dummyResponse(c)
+		if strings.Compare(segments[1], "") != 0 {
+			DeleteTerminalHandler(c)
 		} else {
 			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
 		}
@@ -132,7 +131,35 @@ func dummyResponse(c *gin.Context) {
 	c.String(http.StatusOK, "wow")
 }
 
-func LoginFunc(c *gin.Context) {
+func PostTerminalInsert(c *gin.Context) {
+	var input term.TerminalIn
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		common.ErrHandler(err)
+		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New("Input not valid."))
+		c.Abort()
+		return
+	}
+
+	terminal, err := term.InsertTerminal(input)
+	if err != nil {
+		if strings.Compare("Contact not found.", err.Error()) == 0 {
+			common.ErrHandler(err)
+			common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, errors.New("Fail to insert terminal."))
+			c.Abort()
+			return
+		} else {
+			common.ErrHandler(err)
+			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, errors.New("Database inserting fail."))
+			c.Abort()
+			return
+		}
+	}
+
+	c.JSON(http.StatusCreated, terminal)
+}
+
+func PostLoginFunc(c *gin.Context) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	var grant term.Grant
 	var user usr.UserIn
@@ -185,4 +212,145 @@ func LoginFunc(c *gin.Context) {
 	} else {
 		common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Currently only accept password grant."))
 	}
+}
+
+func GetTerminalIdHandler(c *gin.Context) {
+	var records []term.TerminalOut
+	var record term.TerminalOut
+	var err error
+	var segments = strings.Split(c.Param("path1"), "/")
+	var id string
+
+	// FIXME: need some filtering.
+	id = segments[1]
+
+	records, err = term.GetTerminal(id, 0, 0)
+	if err != nil {
+		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+	}
+	if len(records) > 0 {
+		record = records[0]
+	} else {
+		common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, errors.New("You are find something we can't found it here."))
+		return
+	}
+
+	c.JSON(http.StatusOK, record)
+	return
+
+}
+
+func GetTerminalAllHandler(c *gin.Context) {
+	var records []term.TerminalOut
+	var segments = strings.Split(c.Param("path1"), "/")
+	var l, o int64
+	var limit, offset int
+	var err error
+
+	md, ada := c.Get("middleware")
+	log.Println(md, ada)
+
+	if len(segments) == 3 {
+		offset = 0
+		limit, err = strconv.Atoi(segments[2])
+		if err != nil {
+			common.ErrHandler(err)
+			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New(
+				fmt.Sprintf("%+v should be numeric", segments[2])))
+			c.Abort()
+			return
+		}
+	} else if len(segments) == 4 {
+		offset, err = strconv.Atoi(segments[3])
+		if err != nil {
+			log.Println(err.Error())
+			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New(
+				fmt.Sprintf("%+v should be numeric", segments[3])))
+			c.Abort()
+			return
+		}
+		limit, err = strconv.Atoi(segments[2])
+		if err != nil {
+			log.Println(err.Error())
+			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New(
+				fmt.Sprintf("%+v should be numeric", segments[2])))
+			c.Abort()
+			return
+		}
+	} else {
+		limit = 10
+		offset = 0
+	}
+
+	if err == nil { // tidak ada error dari konversi
+		l = int64(limit)
+		o = int64(offset)
+	}
+
+	records, err = term.GetTerminal("", l, o)
+	if err != nil {
+		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+		c.Abort()
+	}
+
+	c.JSON(http.StatusOK, records)
+}
+
+func PutTerminalHandler(c *gin.Context) {
+	var segments = strings.Split(c.Param("path1"), "/")
+	var id string
+	var input term.TerminalUpdate
+
+	// FIXME: need some filtering.
+	id = segments[1]
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, err)
+		return
+	}
+
+	_, err := term.UpdateTerminal(id, input)
+
+	if err != nil {
+		if strings.Compare("Contact not found.", err.Error()) == 0 {
+			common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, err)
+			c.Abort()
+			return
+		} else {
+			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+			c.Abort()
+			return
+		}
+	}
+
+	on, err := term.GetTerminal(id, 0, 0)
+	if err != nil {
+		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+		c.Abort()
+		return
+	}
+	log.Println(on)
+
+	c.JSON(http.StatusOK, on[0])
+	return
+}
+
+func DeleteTerminalHandler(c *gin.Context) {
+	var segments = strings.Split(c.Param("path1"), "/")
+	var id string
+
+	// FIXME: need some filtering.
+	id = segments[1]
+
+	// contacts := cpac.GetContact(id, 0, 0)
+	contact, err := term.DeleteTerminal(id)
+	if err != nil {
+		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+		return
+	} else if (err != nil) && (strings.Compare("Contact not found.", err.Error()) == 0) {
+		common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, contact)
 }

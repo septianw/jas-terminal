@@ -114,7 +114,7 @@ func TestPutTerminal(t *testing.T) {
 		t.Fail()
 	}
 
-	terminal, err := PutTerminal(LastID, termin)
+	terminal, err := UpdateTerminal(LastID, termin)
 	t.Logf("Updated terminal: %+v\n", terminal)
 	t.Logf("Error: %+v\n", err)
 

@@ -21,7 +21,7 @@ import (
 	"github.com/septianw/jas/common"
 )
 
-const VERSION = "0.1.0"
+const VERSION = Version
 
 type TerminalFull struct {
 	TerminalId     string
@@ -223,7 +223,7 @@ func GetTerminal(id string, limit, offset int64) (terminals []TerminalOut, err e
 	return
 }
 
-func PutTerminal(id string, termin TerminalIn) (terminal TerminalOut, err error) {
+func UpdateTerminal(id string, termin TerminalUpdate) (terminal TerminalOut, err error) {
 	var sbTerm strings.Builder
 
 	_, err = sbTerm.WriteString(fmt.Sprintf(`UPDATE terminal SET `+"`name`"+` = '%s',

@@ -1,5 +1,5 @@
 name = "terminal"
-version = "0.1"
+version = "versionplaceholder"
 sofile = "terminal.so"
 permission = [
 "Create terminal",

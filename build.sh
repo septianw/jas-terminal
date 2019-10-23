@@ -1,7 +1,10 @@
 #!/bin/bash
 
+APIVERSION=0.x.x
 VERSION=$(cat VERSION);
 COMMIT=$(git rev-parse --short HEAD);
+
+WRITTENVERSION=$APIVERSION'-'$VERSION'-'$COMMIT
 
 git diff-index --quiet HEAD --
 
@@ -11,8 +14,9 @@ then
   exit 1
 fi
 
-sed "s/commitplaceholder/"$COMMIT"/g" version.template > ./package/version.go
-sed -i "s/versionplaceholder/"$VERSION"/g" ./package/version.go
+sed "s/versionplaceholder/"$WRITTENVERSION"/g" version.template > ./package/version.go
+sed -i "s/versionplaceholder/"$WRITTENVERSION"/g" ./module.toml
+
 mkdir bungkus
 go build -buildmode=plugin -ldflags="-s -w" -o bungkus/terminal.so
 cp -Rvf LICENSE CHANGELOG  module.toml schema bungkus

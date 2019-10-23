@@ -22,4 +22,4 @@ go build -buildmode=plugin -ldflags="-s -w" -o bungkus/terminal.so
 cp -Rvf LICENSE CHANGELOG  module.toml schema bungkus
 mv bungkus terminal
 tar zcvvf terminal-$WRITTENVERSION.tar.gz terminal
-rm -Rvf terminal
+rm -Rvf terminal ./module.toml ./package/version.go

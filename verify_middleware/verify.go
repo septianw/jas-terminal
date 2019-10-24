@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	term "github.com/septianw/jas-terminal/package"
+	term "github.com/septianw/jas-terminal"
 
 	// usr "github.com/septianw/jas-user/package"
 	"github.com/septianw/jas/common"

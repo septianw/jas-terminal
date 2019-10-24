@@ -1,91 +1,19 @@
-package main
+package terminal
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
-	"log"
-	"net/http"
-	"net/http/httptest"
-
-	"net/url"
-	"strings"
 	"testing"
 
+	"log"
 	"os"
-
-	// term "github.com/septianw/jas-terminal/package"
-	"github.com/google/uuid"
-	term "github.com/septianw/jas-terminal/package"
-	"github.com/septianw/jas/common"
-	"github.com/septianw/jas/types"
-
-	"github.com/stretchr/testify/assert"
-
-	// "strings"
 	"reflect"
 
-	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/septianw/jas/common"
+	"github.com/septianw/jas/types"
 )
 
-type header map[string]string
-type headers []header
-type payload struct {
-	Method string
-	Url    string
-	Body   io.Reader
-}
-type expectation struct {
-	Code int
-	Body string
-}
-type quest struct {
-	pload  payload
-	heads  headers
-	expect expectation
-}
-type quests []quest
-
-var termid string
-
-func getArm() (*gin.Engine, *httptest.ResponseRecorder) {
-	router := gin.New()
-	gin.SetMode(gin.ReleaseMode)
-	Router(router)
-
-	recorder := httptest.NewRecorder()
-	return router, recorder
-}
-
-func handleErr(err error) {
-	if err != nil {
-		log.Fatalln(err)
-	}
-}
-
-func doTheTest(load payload, heads headers) *httptest.ResponseRecorder {
-	var router, recorder = getArm()
-
-	req, err := http.NewRequest(load.Method, load.Url, load.Body)
-	log.Printf("%+v", req)
-	handleErr(err)
-
-	if len(heads) != 0 {
-		for _, head := range heads {
-			for key, value := range head {
-				req.Header.Set(key, value)
-			}
-		}
-	}
-	router.ServeHTTP(recorder, req)
-
-	return recorder
-}
-
-func SetupRouter() *gin.Engine {
-	return gin.New()
-}
+var LastID string
 
 func SetEnvironment() {
 	var rt types.Runtime
@@ -108,201 +36,188 @@ func UnsetEnvironment() {
 	os.Remove("/tmp/shinyRuntimeFile")
 }
 
-func TestInsertFunc(t *testing.T) {
+func TestInsertTerminal(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
 	defer UnsetEnvironment()
-	var input term.TerminalIn
-	termid = uuid.New().String()
 
-	input.Name = "Kasir jogja47"
-	input.Location = "Apt. 954"
-	input.TerminalId = termid
+	var termin, termonit TerminalIn
+	var err error
+	lid := uuid.New()
 
-	jsonInput, err := json.Marshal(input)
+	LastID = lid.String()
+	t.Log(LastID)
+
+	termin.Name = "asmnljk"
+	termin.Location = "Suite 819"
+	termin.TerminalId = LastID
+	_, err = InsertTerminal(termin)
 	if err != nil {
-		t.Log(err)
-		t.Fail()
-	}
-	t.Log(string(jsonInput))
-
-	q := quest{
-		payload{"POST", "/api/v1/terminal/", bytes.NewBuffer(jsonInput)},
-		headers{
-			header{"X-terminal": "02162aaa-1719-39a3-adef-f2430324f56a"},
-		},
-		expectation{201, "contact post"},
-	}
-
-	rec := doTheTest(q.pload, q.heads)
-	t.Log(rec)
-	t.Log(rec.Code)
-	t.Log(rec.Body.String())
-
-	terminals, err := term.GetTerminal(termid, 0, 0)
-	t.Log(terminals, err)
-	if err != nil {
-		t.Fail()
-	}
-	t.Log(reflect.DeepEqual(terminals[0], rec.Body.String()))
-	termjson, err := json.Marshal(terminals[0])
-	if err != nil {
+		t.Logf("error insert terminal: %+v\n", err)
 		t.Fail()
 	}
 
-	assert.Equal(t, q.expect.Code, rec.Code)
-	assert.Equal(t, string(termjson), strings.TrimSpace(rec.Body.String()))
+	ters, err := GetTerminal(LastID, 0, 0)
+	if err != nil {
+		t.Logf("error get terminal after insert: %+v\n", err)
+		t.Fail()
+	}
+
+	if len(ters) == 0 {
+		t.Logf("fail to insert, last inserted: %+v\n", ters)
+		t.Fail()
+	}
+
+	termonit.TerminalId = ters[0].TerminalId
+	termonit.Name = ters[0].Name
+	termonit.Location = ters[0].Location
+
+	if !reflect.DeepEqual(termonit, termin) {
+		t.Fail()
+	}
 }
 
-func TestGetFunc(t *testing.T) {
+func TestGetTerminal(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
 	defer UnsetEnvironment()
-	// var input term.TerminalIn
 
-	terminal, err := term.GetTerminal(termid, 0, 0)
+	Terminals, err := GetTerminal("", 2, 3)
+	t.Log(Terminals, err)
 	if err != nil {
-		t.Log(terminal)
-		t.Fail()
-	}
-	terminalJson, err := json.Marshal(terminal[0])
-	if err != nil {
-		t.Log(terminal)
+		t.Logf("Error: %+v\n", err)
 		t.Fail()
 	}
 
-	terminals, err := term.GetTerminal("", 2, 0)
+	Terminals, err = GetTerminal(LastID, 0, 0)
+	t.Log(Terminals, err)
 	if err != nil {
-		t.Log(terminals)
+		t.Logf("Error: %+v\n", err)
 		t.Fail()
 	}
-	terminalsJson, err := json.Marshal(terminals)
-	if err != nil {
-		t.Log(terminals)
-		t.Fail()
-	}
-
-	qs := quests{
-		quest{
-			payload{"GET", fmt.Sprintf("/api/v1/terminal/%s", termid), nil},
-			headers{
-				header{"X-terminal": "02162aaa-1719-39a3-adef-f2430324f56a"},
-			},
-			expectation{200, string(terminalJson)},
-		},
-		quest{
-			payload{"GET", "/api/v1/terminal/all/2/0", nil},
-			headers{
-				header{"X-terminal": "02162aaa-1719-39a3-adef-f2430324f56a"},
-			},
-			expectation{200, string(terminalsJson)},
-		},
-	}
-
-	for _, q := range qs {
-		rec := doTheTest(q.pload, q.heads)
-		assert.Equal(t, q.expect.Code, rec.Code)
-		assert.Equal(t, q.expect.Body, strings.TrimSpace(rec.Body.String()))
-		t.Log(rec)
-	}
-	// assert.Equal(t, string(termjson), strings.TrimSpace(rec.Body.String()))
 }
 
-func TestTerminalPutPositive(t *testing.T) {
+func TestPutTerminal(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
 	defer UnsetEnvironment()
-	var input term.TerminalUpdate
 
-	input.Name = "Kasir jogja47"
-	input.Location = "Suite 094"
-	// input.TerminalId = termid
+	var termin TerminalIn
 
-	jsonInput, err := json.Marshal(input)
+	termin.Name = "mamamia"
+	termin.Location = "Suite 819"
+	termin.TerminalId = LastID
+
+	ters, err := GetTerminal(LastID, 0, 0)
 	if err != nil {
-		t.Log(err)
+		t.Logf("Error: %+v\n", err)
 		t.Fail()
 	}
 
-	q := quest{
-		payload{"PUT", fmt.Sprintf("/api/v1/terminal/%s", termid), bytes.NewBuffer(jsonInput)},
-		headers{},
-		expectation{200, "wow"},
+	terminal, err := UpdateTerminal(LastID, termin)
+	t.Logf("Updated terminal: %+v\n", terminal)
+	t.Logf("Error: %+v\n", err)
+
+	if err != nil {
+		t.Logf("Error: %+v\n", err)
+		t.Fail()
 	}
 
-	rec := doTheTest(q.pload, q.heads)
-	t.Log(rec)
-	terminals, err := term.GetTerminal(termid, 0, 0)
-	if err != nil {
-		t.Log(err)
+	t.Logf("Ters: %+v\n", ters)
+	if reflect.DeepEqual(ters[0], terminal) {
 		t.Fail()
 	}
-	termJson, err := json.Marshal(terminals[0])
-	if err != nil {
-		t.Log(err)
-		t.Fail()
-	}
-	assert.Equal(t, q.expect.Code, rec.Code)
-	assert.Equal(t, string(termJson), strings.TrimSpace(rec.Body.String()))
 }
 
-func TestContactDeletePositive(t *testing.T) {
+func TestDeleteTerminal(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
 	defer UnsetEnvironment()
 
-	// contactUpdatedJSON, err := json.Marshal(cpac.ContactOut{
-	// 	LastPostID,
-	// 	"Pramitha",
-	// 	"Utami",
-	// 	"Mr",
-	// 	"konsumen",
-	// })
-	// common.ErrHandler(err)
-
-	q := quest{
-		payload{"DELETE", fmt.Sprintf("/api/v1/terminal/%s", termid), nil},
-		headers{},
-		expectation{200, "wow"},
-	}
-
-	terminals, err := term.GetTerminal(termid, 0, 0)
+	terminal, err := DeleteTerminal(LastID)
 	if err != nil {
-		t.Log(err)
+		t.Logf("Error: %+v\n", err)
+		t.Fail()
+	}
+	_, err = GetTerminal(LastID, 0, 0)
+	if err == nil {
+		t.Logf("Error: %+v\n", err)
 		t.Fail()
 	}
 
-	termJson, err := json.Marshal(terminals[0])
-	if err != nil {
-		t.Log(err)
-		t.Fail()
-	}
-
-	rec := doTheTest(q.pload, q.heads)
-	t.Log(rec)
-	assert.Equal(t, q.expect.Code, rec.Code)
-	assert.Equal(t, string(termJson), strings.TrimSpace(rec.Body.String()))
+	t.Logf("Deleted terminal: %+v", terminal)
 }
 
-func TestLoginFunc(t *testing.T) {
+func TestVerifyClient(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
 	defer UnsetEnvironment()
+	var verified bool
+	var err error
 
-	uv := url.Values{}
-	uv.Add("grant_type", "password")
-	uv.Add("username", "septianw")
-	uv.Add("password", "password")
-	uv.Add("client_id", "01d23d2208cc001ceee0b53bf2a8a306476d7f78")
-
-	// logparam := strings.NewReader(uv.Encode())
-
-	q := quest{
-		payload{"POST", "/api/v1/terminal/login", bytes.NewBuffer([]byte(uv.Encode()))},
-		headers{
-			header{"X-terminal": "02162aaa-1719-39a3-adef-f2430324f56a"},
-			header{"Content-Type": "application/x-www-form-urlencoded"},
-		},
-		expectation{201, "contact post"},
+	verified, err = VerifyClients("01d23d2208cc001ceee0b53bf2a8a306476d7f78", "")
+	if err != nil {
+		t.Log(verified, err)
+		t.Fail()
+	}
+	if !verified {
+		t.Log(verified, err)
+		t.Fail()
 	}
 
-	rec := doTheTest(q.pload, q.heads)
+	verified, err = VerifyClients("01d23d2208cc001ceee0b53bf2a8a306476d7f78", "59fe3666586748f79243e5d176c9ea702ee9397d70de87ffeb764c0f7bb9ba2d")
+	if err != nil {
+		t.Log(verified, err)
+		t.Fail()
+	}
+	if !verified {
+		t.Log(verified, err)
+		t.Fail()
+	}
 
-	t.Log(rec)
-	t.Log(uv.Encode())
+	verified, err = VerifyClients("ini salah", "")
+	if err != nil {
+		t.Log(verified, err)
+		t.Fail()
+	}
+	if verified {
+		t.Log(verified, err)
+		t.Fail()
+	}
+
+	verified, err = VerifyClients("ini salah", "ini lebih salah lagi")
+	if err != nil {
+		t.Log(verified, err)
+		t.Fail()
+	}
+	if verified {
+		t.Log(verified, err)
+		t.Fail()
+	}
+}
+
+func TestIssueToken(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	SetEnvironment()
+	defer UnsetEnvironment()
+	var g Grant
+
+	g.ClientId = "01d23d2208cc001ceee0b53bf2a8a306476d7f78"
+	g.Username = "septianw"
+	g.Password = "$2a$10$HL4KenhsWvRlXyDlzUfa3OZHZzs7dkEb2srN8NrGrJMPwJHEfh792"
+	g.GrantType = "password"
+
+	terminalId := "1a58a82c-518d-311a-a9ec-5d3be9e4bd3e"
+
+	response, err := IssueTokens(terminalId, g)
+	if err != nil {
+		t.Fail()
+	}
+
+	js, err := json.Marshal(response)
+	if err != nil {
+		t.Fail()
+	}
+
+	t.Logf("response: %+v\nerror: %+v\njson:%+v\n", response, err, string(js))
 }

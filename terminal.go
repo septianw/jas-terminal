@@ -1,356 +1,511 @@
-package main
+package terminal
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 
-	"strconv"
+	"path/filepath"
 
-	"errors"
+	// "github.com/gin-gonic/gin"
+	"crypto/sha256"
+	"encoding/base64"
 
-	"github.com/gin-gonic/gin"
-	loc "github.com/septianw/jas-location/package"
-	term "github.com/septianw/jas-terminal/package"
-	usr "github.com/septianw/jas-user/package"
+	// "strconv"
+	"time"
+
+	"github.com/google/uuid"
+	usr "github.com/septianw/jas-user"
 	"github.com/septianw/jas/common"
 )
 
-const VERSION = term.VERSION
+const VERSION = Version
 
-/*
-  `uid` INT NOT NULL AUTO_INCREMENT,
-  `uname` VARCHAR(225) NOT NULL,
-  `upass` TEXT NOT NULL,
-  `contact_contactid` INT NOT NULL,
-*/
+type TerminalFull struct {
+	TerminalId     string
+	Name           string
+	Deleted        uint8
+	Location_locid uint64
+}
 
-/*
-ERROR CODE LEGEND:
-error containt 4 digits,
-first digit represent error location either module or main app
-1 for main app
-2 for module
+type TerminalOut struct {
+	TerminalId string  `json:"terminalid" binding:"required"`
+	Name       string  `json:"name" binding:"required"`
+	Location   string  `json:"location" binding:"required"`
+	Latitude   float64 `json:"latitude"`
+	Longitude  float64 `json:"longitude"`
+}
 
-second digit represent error at level app or database
-1 for app
-2 for database
+type TerminalIn struct {
+	TerminalId string `json:"terminalid" binding:"required"`
+	Name       string `json:"name" binding:"required"`
+	Location   string `json:"location" binding:"required"`
+}
 
-third digit represent error with input variable or variable manipulation
-0 for skipping this error
-1 for input validation error
-2 for variable manipulation error
+type TerminalUpdate struct {
+	Name     string `json:"name"`
+	Location string `json:"location"`
+}
 
-fourth digit represent error with logic, this type of error have
-increasing error number based on which part of code that error.
-0 for skipping this error
-1 for unknown logical error
-2 for whole operation fail, operation end unexpectedly
-*/
-
-const DATABASE_EXEC_FAIL = 2200
-const MODULE_OPERATION_FAIL = 2102
-const INPUT_VALIDATION_FAIL = 2110
-
-var NOT_ACCEPTABLE = gin.H{"code": "NOT_ACCEPTABLE", "message": "You are trying to request something not acceptible here."}
-var NOT_FOUND = gin.H{"code": "NOT_FOUND", "message": "You are find something we can't found it here."}
-
-var segments []string
-
-func Bootstrap() {
-	fmt.Println("Module location bootstrap.")
+type Grant struct {
+	GrantType    string `form:"grant_type"`
+	Username     string `form:"username"`
+	Password     string `form:"password"`
+	ClientId     string `form:"client_id"`
+	ClientSecret string `form:"client_secret"`
+	Scope        string `form:"scope"`
 }
 
 /*
-POST   /user
-GET    /user/(:uid)
-GET    /user/all/(:offset)/(:limit)
------
-ini masuk ke terminal
-GET    /user/login
-	basic auth
-	return token, refresh token
------
-PUT    /user/(:uid)
-DELETE /user/(:uid)
+{
+  "access_token":"MTQ0NjJkZmQ5OTM2NDE1ZTZjNGZmZjI3",
+  "token_type":"bearer",
+  "expires_in":3600,
+  "refresh_token":"IwOGYzYTlmM2YxOTQ5MGE3YmNmMDFkNTVk",
+  "scope":"create"
+}
 */
-
-func Router(r *gin.Engine) {
-	r.Any("/api/v1/terminal/*path1", deflt)
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    uint64 `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	Scope        string `json:"scope"`
 }
 
-func deflt(c *gin.Context) {
-	segments := strings.Split(c.Param("path1"), "/")
-	// log.Printf("\n%+v\n", c.Request.Method)
-	// log.Printf("\n%+v\n", c.Param("path1"))
-	// log.Printf("\n%+v\n", segments)
-	// log.Printf("\n%+v\n", len(segments))
+/*
+SELECT
+	t.terminalid as terminalid,
+    t.name as `name`,
+    l.name as `location_name`,
+    l.latitude latitude,
+    l.longitude longitude
+FROM terminal AS t
+JOIN location AS l
+  ON t.location_locid = l.locid
+WHERE t.deleted = 0;
 
-	switch c.Request.Method {
-	case "POST":
-		if strings.Compare(segments[1], "") == 0 {
-			PostTerminalInsert(c)
-		} else if strings.Compare(segments[1], "login") == 0 {
-			PostLoginFunc(c)
-		} else {
-			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
-		}
-		break
-	case "GET":
-		if strings.Compare(segments[1], "all") == 0 {
-			GetTerminalAllHandler(c)
-		} else if strings.Compare(segments[1], "") != 0 {
-			GetTerminalIdHandler(c)
-		} else {
-			c.AbortWithStatusJSON(http.StatusNotAcceptable, loc.NOT_ACCEPTABLE)
-		}
-		break
-	case "PUT":
-		if strings.Compare(segments[1], "") != 0 {
-			PutTerminalHandler(c)
-		} else {
-			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
-		}
-		break
-	case "DELETE":
-		if strings.Compare(segments[1], "") != 0 {
-			DeleteTerminalHandler(c)
-		} else {
-			c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
-		}
-		break
-	default:
-		c.AbortWithStatusJSON(http.StatusMethodNotAllowed, loc.NOT_ACCEPTABLE)
-		break
+*/
+
+func getdbobj() (db *sql.DB, err error) {
+	rt := common.ReadRuntime()
+	dbs := common.LoadDatabase(filepath.Join(rt.Libloc, "database.so"), rt.Dbconf)
+	db, err = dbs.OpenDb(rt.Dbconf)
+	return
+}
+
+func Query(q string) (*sql.Rows, error) {
+	db, err := getdbobj()
+	common.ErrHandler(err)
+	defer db.Close()
+
+	return db.Query(q)
+}
+
+func Exec(q string) (sql.Result, error) {
+	db, err := getdbobj()
+	common.ErrHandler(err)
+	defer db.Close()
+
+	return db.Exec(q)
+}
+
+// get query
+/*
+	sbTerm.WriteString(fmt.Sprintf(`SELECT t.terminalid as terminalid,
+    t.name as ` + "`name`" + `, l.name as ` + "`location_name`" + `, l.latitude latitude,
+    l.longitude longitude FROM terminal AS t JOIN location AS l
+	ON t.location_locid = l.locid WHERE t.deleted = 0`))
+*/
+// insert query
+/*
+	sbTerm.WriteString(fmt.Sprintf(`INSERT INTO `+"`terminal`"+` (terminalid, `+
+		"`name`"+`, deleted, location_locid) VALUES ('%s', '%s', 0, (
+	SELECT locid FROM location WHERE `+"`name`"+` = '%s'))`,
+		termin.TerminalId, termin.Name, termin.Location))
+*/
+// update query
+/*
+	sbTerm.WriteString(fmt.Sprintf(`UPDATE terminal SET `+"`name`"+` = '%s',
+	location_locid = (SELECT locid FROM location WHERE ` + "`name`" + ` = '%s')
+	WHERE terminalid = '%s'`,
+		termin.TerminalId, termin.Name, termin.Location))
+*/
+// delete query
+/*
+	sbTerm.WriteString(fmt.Sprintf(`UPDATE terminal SET deleted = 1 WHERE terminalid = '%s'`,
+		termin.TerminalId))
+*/
+
+func InsertTerminal(termin TerminalIn) (termout TerminalOut, err error) {
+	var sbTerm strings.Builder
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`INSERT INTO `+"`terminal`"+` (terminalid, `+
+		"`name`"+`, deleted, location_locid) VALUES ('%s', '%s', 0, (
+	SELECT locid FROM location WHERE `+"`name`"+` = '%s'))`,
+		termin.TerminalId, termin.Name, termin.Location))
+	if err != nil {
+		return
 	}
-	// c.String(http.StatusOK, "hai")
-}
+	log.Println(sbTerm.String())
 
-func dummyResponse(c *gin.Context) {
-	c.String(http.StatusOK, "wow")
-}
-
-func PostTerminalInsert(c *gin.Context) {
-	var input term.TerminalIn
-
-	if err := c.ShouldBindJSON(&input); err != nil {
-		common.ErrHandler(err)
-		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New("Input not valid."))
-		c.Abort()
+	_, err = Exec(sbTerm.String())
+	if err != nil {
 		return
 	}
 
-	terminal, err := term.InsertTerminal(input)
+	terminals, err := GetTerminal(termin.TerminalId, 0, 0)
 	if err != nil {
-		if strings.Compare("Contact not found.", err.Error()) == 0 {
-			common.ErrHandler(err)
-			common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, errors.New("Fail to insert terminal."))
-			c.Abort()
-			return
+		return
+	}
+	if len(terminals) == 0 {
+		err = errors.New("Terminal not found.")
+		return
+	}
+	termout = terminals[0]
+
+	return
+}
+
+func GetTerminal(id string, limit, offset int64) (terminals []TerminalOut, err error) {
+	var sbTerm strings.Builder
+	var terminal TerminalOut
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT t.terminalid as terminalid,
+    t.name as ` + "`name`" + `, l.name as ` + "`location_name`" + `, l.latitude latitude,
+    l.longitude longitude FROM terminal AS t JOIN location AS l
+	ON t.location_locid = l.locid WHERE t.deleted = 0`))
+	if err != nil {
+		return
+	}
+
+	if id == "" {
+		if limit == 0 {
+			_, err = sbTerm.WriteString(fmt.Sprintf(" LIMIT 10 OFFSET 0"))
+			if err != nil {
+				return
+			}
 		} else {
-			common.ErrHandler(err)
-			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, errors.New("Database inserting fail."))
-			c.Abort()
+			_, err = sbTerm.WriteString(fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset))
+			if err != nil {
+				return
+			}
+		}
+	} else {
+		_, err = sbTerm.WriteString(fmt.Sprintf(" AND terminalid = '%s'", id))
+		if err != nil {
 			return
 		}
 	}
 
-	c.JSON(http.StatusCreated, terminal)
+	log.Println(sbTerm.String())
+
+	rows, err := Query(sbTerm.String())
+	if err != nil {
+		return
+	}
+
+	for rows.Next() {
+		err = rows.Scan(&terminal.TerminalId, &terminal.Name, &terminal.Location, &terminal.Latitude, &terminal.Longitude)
+		if err != nil {
+			return
+		}
+		terminals = append(terminals, terminal)
+	}
+
+	if len(terminals) == 0 {
+		err = errors.New("Terminal not found.")
+		return
+	}
+
+	return
 }
 
-func PostLoginFunc(c *gin.Context) {
+func UpdateTerminal(id string, termin TerminalUpdate) (terminal TerminalOut, err error) {
+	var sbTerm strings.Builder
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`UPDATE terminal SET `+"`name`"+` = '%s',
+	location_locid = (SELECT locid FROM location WHERE `+"`name`"+` = '%s')
+	WHERE terminalid = '%s'`,
+		termin.Name, termin.Location, id))
+	if err != nil {
+		return
+	}
+
+	result, err := Exec(sbTerm.String())
+	if err != nil {
+		return
+	}
+	raff, err := result.RowsAffected()
+	if err != nil {
+		return
+	}
+	log.Printf("Updated terminal(s): %+v", raff)
+
+	terminals, err := GetTerminal(id, 0, 0)
+	if err != nil {
+		return
+	}
+	if len(terminals) == 0 {
+		err = errors.New("Terminal not found.")
+		return
+	}
+	terminal = terminals[0]
+
+	return
+}
+
+func DeleteTerminal(id string) (terminal TerminalOut, err error) {
+	var sbTerm strings.Builder
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`UPDATE terminal SET deleted = 1 WHERE terminalid = '%s'`,
+		id))
+	if err != nil {
+		return
+	}
+
+	terminals, err := GetTerminal(id, 0, 0)
+	if err != nil {
+		return
+	}
+
+	if len(terminals) == 0 {
+		err = errors.New("Terminal not found.")
+		return
+	}
+
+	result, err := Exec(sbTerm.String())
+	if err != nil {
+		return
+	}
+	raff, err := result.RowsAffected()
+	if err != nil {
+		return
+	}
+	log.Printf("Updated terminal(s): %+v", raff)
+
+	terminal = terminals[0]
+
+	return
+}
+
+func verify(sbTerm strings.Builder) (verified bool, err error) {
+	var count uint
+	verified = false
+
+	log.Println(sbTerm.String())
+	rows, err := Query(sbTerm.String())
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		rows.Scan(&count)
+	}
+
+	log.Printf("Record Found: %d\nverified: %+v", count, (count > 0))
+	if count > 0 {
+		verified = true
+	}
+
+	return
+}
+
+func VerifyClients(clientId, clientSecret string) (verified bool, err error) {
+	var sbTerm strings.Builder
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT COUNT(*) AS count
+	FROM clientcredential WHERE clientid = '%s'`, clientId))
+	if err != nil {
+		return
+	}
+
+	if strings.Compare(clientSecret, "") != 0 {
+		_, err = sbTerm.WriteString(fmt.Sprintf(` AND clientsecret = '%s'`, clientSecret))
+		if err != nil {
+			return
+		}
+	}
+
+	return verify(sbTerm)
+}
+
+func VerifyTerminal(terminalId string) (verified bool, err error) {
+	var sbTerm strings.Builder
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT COUNT(*) AS count
+	FROM terminal WHERE terminalid = '%s'`, terminalId))
+	if err != nil {
+		return
+	}
+
+	return verify(sbTerm)
+}
+
+func VerifyAccessToken(accessToken string) (verified bool, err error) {
+	var sbTerm strings.Builder
+
+	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT COUNT(*) count
+	FROM accesstoken WHERE used = 0 AND token = '%s'`, accessToken))
+	if err != nil {
+		return
+	}
+
+	return verify(sbTerm)
+}
+
+func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err error) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	var grant term.Grant
-	var user usr.UserIn
-	// var usersOut []usr.UserOut
-	var err error
-	var passVerified, clientVerified bool
-	var tokenResponse term.TokenResponse
+	var sbAkey, sbEkey, sbQkey strings.Builder
+	var tokenUsageId int64
 
-	if err = c.ShouldBind(&grant); err != nil {
-		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, err)
+	accessTokenExpired := (60 * 60 * 24) + time.Now().Unix()
+	refreshTokenExpired := (60 * 60 * 24 * 3) + time.Now().Unix()
+
+	accessExpired := fmt.Sprintf("%d", accessTokenExpired)
+	refreshExpired := fmt.Sprintf("%d", refreshTokenExpired)
+
+	sbAkey.WriteString(accessExpired)
+	sbAkey.WriteString("$")
+	ka := sha256.Sum256([]byte(uuid.New().String()))
+	sbAkey.WriteString(string(ka[:]))
+
+	sbEkey.WriteString(refreshExpired)
+	sbEkey.WriteString("$")
+	ke := sha256.Sum256([]byte(uuid.New().String()))
+	sbEkey.WriteString(string(ke[:]))
+
+	accessToken := base64.StdEncoding.EncodeToString([]byte(sbAkey.String()))
+	refreshToken := base64.StdEncoding.EncodeToString([]byte(sbEkey.String()))
+
+	/*users*/
+	// _, err = usr.FindUser(usr.UserIn{Uname: grant.Username})
+	users, err := usr.FindUser(usr.UserIn{Uname: grant.Username})
+	log.Println(err)
+	log.Println(accessToken, refreshToken)
+
+	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage
+	(user_uid, user_uname, terminal_terminalid, date)
+	VALUES (%d, '%s', '%s', '%s')`,
+		users[0].Uid, users[0].Uname, terminalId, time.Now().Format("2006-01-02 15:04:05")))
+	qTokenUsage := sbQkey.String()
+	fmt.Println(qTokenUsage)
+	result, err := Exec(qTokenUsage)
+	if err != nil {
+		return
+	}
+	tokenUsageId, err = result.LastInsertId()
+	if err != nil {
+		return
+	}
+	sbQkey.Reset()
+	log.Println(tokenUsageId)
+
+	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO accesstoken
+	(token, timeout, used, tokenusage_usageid)
+	VALUES ('%s', %d, 0, %d)`, accessToken, accessTokenExpired, tokenUsageId))
+	qAccessToken := sbQkey.String()
+	fmt.Println(qAccessToken)
+	_, err = Exec(qAccessToken)
+	if err != nil {
+		return
+	}
+	sbQkey.Reset()
+
+	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
+	(token, timeout, used, tokenusage_usageid)
+	VALUES ('%s', %d, 0, %d)`, refreshToken, refreshTokenExpired, tokenUsageId))
+	qRefreshToken := sbQkey.String()
+	fmt.Println(qRefreshToken)
+	_, err = Exec(qRefreshToken)
+	if err != nil {
 		return
 	}
 
-	log.Printf("%+v", grant)
+	response.ExpiresIn = 60 * 60 * 24
+	response.TokenType = "bearer"
+	response.AccessToken = accessToken
+	response.RefreshToken = refreshToken
 
-	if grant.GrantType == "password" {
-		user.Uname = grant.Username
-
-		passVerified, err = usr.VerifyUser(grant.Username, grant.Password)
-		if err != nil {
-			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
-			return
-		}
-
-		if passVerified {
-			clientVerified, err = term.VerifyClients(grant.ClientId, grant.ClientSecret)
-			if err != nil {
-				// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
-				common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
-				return
-			}
-
-		}
-
-		if passVerified && clientVerified {
-			// terminal := c.MustGet("terminal").(string)
-			terminal := c.GetHeader("X-terminal")
-			tokenResponse, err = term.IssueTokens(terminal, grant)
-			if err != nil {
-				// FIXME: cek, apakah error code ini sudah benar atau belum.
-				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
-				return
-			}
-			c.JSON(http.StatusOK, tokenResponse)
-			return
-		} else {
-			// FIXME: buat status khusus untuk ini di common.
-			c.JSON(http.StatusUnauthorized, nil)
-		}
-	} else {
-		common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Currently only accept password grant."))
-	}
-}
-
-func GetTerminalIdHandler(c *gin.Context) {
-	var records []term.TerminalOut
-	var record term.TerminalOut
-	var err error
-	var segments = strings.Split(c.Param("path1"), "/")
-	var id string
-
-	// FIXME: need some filtering.
-	id = segments[1]
-
-	records, err = term.GetTerminal(id, 0, 0)
-	if err != nil {
-		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
-	}
-	if len(records) > 0 {
-		record = records[0]
-	} else {
-		common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, errors.New("You are find something we can't found it here."))
-		return
-	}
-
-	c.JSON(http.StatusOK, record)
-	return
-
-}
-
-func GetTerminalAllHandler(c *gin.Context) {
-	var records []term.TerminalOut
-	var segments = strings.Split(c.Param("path1"), "/")
-	var l, o int64
-	var limit, offset int
-	var err error
-
-	md, ada := c.Get("middleware")
-	log.Println(md, ada)
-
-	if len(segments) == 3 {
-		offset = 0
-		limit, err = strconv.Atoi(segments[2])
-		if err != nil {
-			common.ErrHandler(err)
-			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New(
-				fmt.Sprintf("%+v should be numeric", segments[2])))
-			c.Abort()
-			return
-		}
-	} else if len(segments) == 4 {
-		offset, err = strconv.Atoi(segments[3])
-		if err != nil {
-			log.Println(err.Error())
-			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New(
-				fmt.Sprintf("%+v should be numeric", segments[3])))
-			c.Abort()
-			return
-		}
-		limit, err = strconv.Atoi(segments[2])
-		if err != nil {
-			log.Println(err.Error())
-			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, errors.New(
-				fmt.Sprintf("%+v should be numeric", segments[2])))
-			c.Abort()
-			return
-		}
-	} else {
-		limit = 10
-		offset = 0
-	}
-
-	if err == nil { // tidak ada error dari konversi
-		l = int64(limit)
-		o = int64(offset)
-	}
-
-	records, err = term.GetTerminal("", l, o)
-	if err != nil {
-		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
-		c.Abort()
-	}
-
-	c.JSON(http.StatusOK, records)
-}
-
-func PutTerminalHandler(c *gin.Context) {
-	var segments = strings.Split(c.Param("path1"), "/")
-	var id string
-	var input term.TerminalUpdate
-
-	// FIXME: need some filtering.
-	id = segments[1]
-
-	if err := c.ShouldBindJSON(&input); err != nil {
-		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, err)
-		return
-	}
-
-	_, err := term.UpdateTerminal(id, input)
-
-	if err != nil {
-		if strings.Compare("Contact not found.", err.Error()) == 0 {
-			common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, err)
-			c.Abort()
-			return
-		} else {
-			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
-			c.Abort()
-			return
-		}
-	}
-
-	on, err := term.GetTerminal(id, 0, 0)
-	if err != nil {
-		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
-		c.Abort()
-		return
-	}
-	log.Println(on)
-
-	c.JSON(http.StatusOK, on[0])
 	return
 }
 
-func DeleteTerminalHandler(c *gin.Context) {
-	var segments = strings.Split(c.Param("path1"), "/")
-	var id string
+func FetchToken(terminalId string, grant Grant) (response TokenResponse, err error) {
+	var t time.Time
+	var sbQToken strings.Builder
+	var responses []TokenResponse
 
-	// FIXME: need some filtering.
-	id = segments[1]
+	t = time.Now()
+	year, month, day := t.Date()
+	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
 
-	// contacts := cpac.GetContact(id, 0, 0)
-	contact, err := term.DeleteTerminal(id)
+	startString := RangeStart.Format("2006-01-02 15:04:05")
+	endString := RangeEnd.Format("2006-01-02 15:04:05")
+
+	sbQToken.WriteString(fmt.Sprintf(`select
+	act.token as access_token,
+	rt.token as refresh_token,
+	act.timeout as expires_in
+from tokenusage as tu
+join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
+join accesstoken as act on act.tokenusage_usageid = tu.usageid
+where `+"`date`"+` between '%s' and '%s'
+and tu.terminal_terminalid = '%s' and tu.user_uname = '%s'`,
+		startString, endString, terminalId, grant.Username))
+
+	fmt.Println(sbQToken.String())
+
+	rows, err := Query(sbQToken.String())
 	if err != nil {
-		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
 		return
-	} else if (err != nil) && (strings.Compare("Contact not found.", err.Error()) == 0) {
-		common.SendHttpError(c, common.RECORD_NOT_FOUND_CODE, err)
+	}
+	for rows.Next() {
+		var sr TokenResponse
+		err = rows.Scan(&sr.AccessToken, &sr.RefreshToken, &sr.ExpiresIn)
+		if err != nil {
+			return
+		}
+
+		sr.TokenType = "bearer"
+
+		responses = append(responses, sr)
+	}
+
+	if len(responses) > 0 {
+		response = responses[0]
+	}
+
+	return
+}
+
+/*
+return :
+{
+  "access_token":"MTQ0NjJkZmQ5OTM2NDE1ZTZjNGZmZjI3",
+  "token_type":"bearer",
+  "expires_in":3600,
+  "refresh_token":"IwOGYzYTlmM2YxOTQ5MGE3YmNmMDFkNTVk",
+  "scope":"create"
+}
+*/
+func IssueTokens(terminalId string, grant Grant) (response TokenResponse, err error) {
+	res, err := FetchToken(terminalId, grant)
+	if err != nil {
 		return
 	}
 
-	c.JSON(http.StatusOK, contact)
+	res1 := &res
+	if (TokenResponse{}) == *res1 {
+		resg, err := GenerateTokens(terminalId, grant)
+		if err != nil {
+			return response, err
+		}
+		response = resg
+	} else {
+		response = res
+	}
+
+	return
 }

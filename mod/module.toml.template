@@ -1,0 +1,13 @@
+name = "terminal"
+version = "0.x.x-0.1.0-83c1cc2"
+sofile = "terminal.so"
+permission = [
+"Create terminal",
+"Access terminal",
+"Modify terminal",
+"Delete terminal",
+]
+scope = [
+"profile",
+]
+dependency = []

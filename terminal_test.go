@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"crypto/rand"
+	"encoding/hex"
 	"log"
+
 	"os"
 	"reflect"
 
@@ -14,12 +17,14 @@ import (
 )
 
 var LastID string
+var Token TokenResponse
+var TerminalId string
 
 func SetEnvironment() {
 	var rt types.Runtime
 	var Dbconf types.Dbconf
 
-	Dbconf.Database = "ipoint"
+	Dbconf.Database = "jasdev"
 	Dbconf.Host = "localhost"
 	Dbconf.Pass = "dummypass"
 	Dbconf.Port = 3306
@@ -36,6 +41,17 @@ func UnsetEnvironment() {
 	os.Remove("/tmp/shinyRuntimeFile")
 }
 
+func randWord(n int) string {
+	word := make([]byte, n)
+	rand.Read(word)
+
+	wordString := hex.EncodeToString(word)
+	log.Println(wordString)
+
+	return wordString
+}
+
+/*CRUD Terminal start*/
 func TestInsertTerminal(t *testing.T) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
@@ -48,7 +64,7 @@ func TestInsertTerminal(t *testing.T) {
 	LastID = lid.String()
 	t.Log(LastID)
 
-	termin.Name = "asmnljk"
+	termin.Name = randWord(8)
 	termin.Location = "Suite 819"
 	termin.TerminalId = LastID
 	_, err = InsertTerminal(termin)
@@ -82,7 +98,7 @@ func TestGetTerminal(t *testing.T) {
 	SetEnvironment()
 	defer UnsetEnvironment()
 
-	Terminals, err := GetTerminal("", 2, 3)
+	Terminals, err := GetTerminal("", 2, 0)
 	t.Log(Terminals, err)
 	if err != nil {
 		t.Logf("Error: %+v\n", err)
@@ -102,11 +118,11 @@ func TestPutTerminal(t *testing.T) {
 	SetEnvironment()
 	defer UnsetEnvironment()
 
-	var termin TerminalIn
+	var termin TerminalUpdate
 
-	termin.Name = "mamamia"
+	termin.Name = randWord(9)
 	termin.Location = "Suite 819"
-	termin.TerminalId = LastID
+	// termin.TerminalId = LastID
 
 	ters, err := GetTerminal(LastID, 0, 0)
 	if err != nil {
@@ -147,6 +163,58 @@ func TestDeleteTerminal(t *testing.T) {
 
 	t.Logf("Deleted terminal: %+v", terminal)
 }
+
+/*CRUD Terminal stop*/
+
+/*CRUD ClientCredential start*/
+
+var cName string
+
+func TestInsertClientCredential(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	SetEnvironment()
+	defer UnsetEnvironment()
+
+	cName = randWord(8)
+	credential, err := InsertClientCredential(cName)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+
+	t.Logf("%+v", credential)
+}
+
+func TestGetClientCredential(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	SetEnvironment()
+	defer UnsetEnvironment()
+
+	credential, err := GetClientCredentials(cName)
+	if err != nil {
+		t.Logf("%+v\n", err)
+		t.Fail()
+	}
+
+	t.Logf("%+v\n", credential)
+}
+
+func TestDeleteClientCredential(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	SetEnvironment()
+	defer UnsetEnvironment()
+
+	credential, err := DeleteClientCredentials(cName)
+
+	if err != nil {
+		t.Logf("%+v\n", err)
+		t.Fail()
+	}
+
+	t.Logf("%+v\n", credential)
+}
+
+/*CRUD ClientCredential stop*/
 
 func TestVerifyClient(t *testing.T) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
@@ -196,28 +264,128 @@ func TestVerifyClient(t *testing.T) {
 	}
 }
 
+// Dalam IssueToken terdapat FetchToken dan GenerateToken
 func TestIssueToken(t *testing.T) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	SetEnvironment()
 	defer UnsetEnvironment()
 	var g Grant
 
-	g.ClientId = "01d23d2208cc001ceee0b53bf2a8a306476d7f78"
-	g.Username = "septianw"
-	g.Password = "$2a$10$HL4KenhsWvRlXyDlzUfa3OZHZzs7dkEb2srN8NrGrJMPwJHEfh792"
+	g.ClientId = "2008e223b4c077f8eaf8e68a23546220"
+	g.Username = "reba63"
+	g.Password = "password"
 	g.GrantType = "password"
 
-	terminalId := "1a58a82c-518d-311a-a9ec-5d3be9e4bd3e"
+	TerminalId = "2e9ba49a-9a42-4cbc-9f66-4359b22b5ff4"
 
-	response, err := IssueTokens(terminalId, g)
+	Token, err := IssueTokens(TerminalId, g)
+	t.Logf("\nToken: %+v\n", Token)
 	if err != nil {
 		t.Fail()
 	}
 
-	js, err := json.Marshal(response)
+	js, err := json.Marshal(Token)
 	if err != nil {
 		t.Fail()
 	}
 
-	t.Logf("response: %+v\nerror: %+v\njson:%+v\n", response, err, string(js))
+	if reflect.DeepEqual(Token, TokenResponse{}) {
+		t.Fail()
+	}
+
+	t.Logf("response: %+v\nerror: %+v\njson:%+v\n", Token, err, string(js))
+}
+
+func TestGenerateToken(t *testing.T) {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	SetEnvironment()
+	defer UnsetEnvironment()
+
+	var err error
+	var tk TokenResponse
+
+	// Generate token dari username password
+	var g Grant
+
+	g.ClientId = "2008e223b4c077f8eaf8e68a23546220"
+	g.Username = "reba63"
+	g.Password = "password"
+	g.GrantType = "password"
+
+	TerminalId = "2e9ba49a-9a42-4cbc-9f66-4359b22b5ff4"
+
+	tk, err = GenerateTokens(TerminalId, g)
+	t.Logf("\n%+v\n", tk)
+	if err != nil {
+		t.Logf("\n%+v\n", err)
+		t.Logf("\n%+v\n", tk)
+		t.Fail()
+	}
+
+	// Generate token dari refresh_token
+	g.GrantType = "refresh_token"
+	g.Username = ""
+	g.Password = ""
+	g.RefreshToken = tk.RefreshToken
+	tk, err = GenerateTokens(TerminalId, g)
+	t.Logf("\n%+v\n", tk)
+	if err != nil {
+		t.Logf("\n%+v\n", err)
+		t.Logf("\n%+v\n", tk)
+		t.Fail()
+	}
+	Token = tk
+}
+
+func TestVerifyToken(t *testing.T) {
+	SetEnvironment()
+	defer UnsetEnvironment()
+	t.Logf("%+v\n", TerminalId)
+	t.Logf("%+v\n", Token.AccessToken)
+	t.Logf("%+v\n", Token)
+
+	// var g Grant
+
+	// g.ClientId = "2008e223b4c077f8eaf8e68a23546220"
+	// g.Username = "reba63"
+	// g.Password = "password"
+	// g.GrantType = "password"
+
+	// TerminalId = "2e9ba49a-9a42-4cbc-9f66-4359b22b5ff4"
+
+	// Token, err := IssueTokens(TerminalId, g)
+	// if err != nil {
+	// 	t.Logf("\nerr: %+v\n", err)
+	// }
+	// if reflect.DeepEqual(Token, TokenResponse{}) {
+	// 	t.Fail()
+	// }
+
+	verified, err := VerifyAccessToken(Token.AccessToken, TerminalId)
+	// verified, err := VerifyAccessToken("", "")
+	t.Logf("%+v, %+v\n", verified, err)
+	if !verified {
+		t.Fail()
+	}
+
+	if err != nil {
+		t.Fail()
+	}
+}
+
+func TestVerifyRefreshToken(t *testing.T) {
+	SetEnvironment()
+	defer UnsetEnvironment()
+	t.Logf("%+v\n", TerminalId)
+	t.Logf("%+v\n", Token)
+	verified, err := VerifyRefreshToken(Token.RefreshToken, TerminalId)
+	// verified, err := VerifyRefreshToken("", "")
+	t.Logf("%+v, %+v\n", verified, err)
+	if !verified {
+		t.Fail()
+	}
+
+	if err != nil {
+		t.Fail()
+	}
 }

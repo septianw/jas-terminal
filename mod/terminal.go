@@ -165,8 +165,9 @@ func PostLoginFunc(c *gin.Context) {
 	var user usr.UserIn
 	// var usersOut []usr.UserOut
 	var err error
-	var passVerified, clientVerified bool
+	var passVerified, clientVerified, refreshTokenVerified bool
 	var tokenResponse term.TokenResponse
+	var terminal string
 
 	if err = c.ShouldBind(&grant); err != nil {
 		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, err)
@@ -175,7 +176,8 @@ func PostLoginFunc(c *gin.Context) {
 
 	log.Printf("%+v", grant)
 
-	if grant.GrantType == "password" {
+	switch grant.GrantType {
+	case "password":
 		user.Uname = grant.Username
 
 		passVerified, err = usr.VerifyUser(grant.Username, grant.Password)
@@ -196,11 +198,12 @@ func PostLoginFunc(c *gin.Context) {
 
 		if passVerified && clientVerified {
 			// terminal := c.MustGet("terminal").(string)
-			terminal := c.GetHeader("X-terminal")
+			terminal = c.GetHeader("X-terminal")
 			tokenResponse, err = term.IssueTokens(terminal, grant)
 			if err != nil {
 				// FIXME: cek, apakah error code ini sudah benar atau belum.
 				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
+				c.Abort()
 				return
 			}
 			c.JSON(http.StatusOK, tokenResponse)
@@ -209,8 +212,43 @@ func PostLoginFunc(c *gin.Context) {
 			// FIXME: buat status khusus untuk ini di common.
 			c.JSON(http.StatusUnauthorized, nil)
 		}
-	} else {
+		break
+	case "refresh_token":
+		clientVerified, err = term.VerifyClients(grant.ClientId, grant.ClientSecret)
+		terminal = c.GetHeader("X-terminal")
+		if err != nil {
+			// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
+			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+			return
+		}
+
+		if clientVerified {
+			refreshTokenVerified, err = term.VerifyRefreshToken(grant.RefreshToken, terminal)
+			if err != nil {
+				// FIXME: cek, apakah error code ini sudah benar atau belum.
+				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
+				return
+			}
+		}
+
+		if clientVerified && refreshTokenVerified {
+			tokenResponse, err = term.GenerateTokens(terminal, grant)
+			if err != nil {
+				// FIXME: cek, apakah error code ini sudah benar atau belum.
+				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
+				c.Abort()
+				return
+			}
+			c.JSON(http.StatusOK, tokenResponse)
+		}
+
+		break
+	default:
 		common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Currently only accept password grant."))
+	}
+
+	if grant.GrantType == "password" {
+	} else {
 	}
 }
 

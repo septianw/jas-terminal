@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 
+	"crypto/rand"
+	"encoding/hex"
 	"net/url"
 	"strings"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	// term "github.com/septianw/jas-terminal/package"
 	"github.com/google/uuid"
 	term "github.com/septianw/jas-terminal"
+
 	"github.com/septianw/jas/common"
 	"github.com/septianw/jas/types"
 
@@ -91,7 +94,7 @@ func SetEnvironment() {
 	var rt types.Runtime
 	var Dbconf types.Dbconf
 
-	Dbconf.Database = "ipoint"
+	Dbconf.Database = "jasdev"
 	Dbconf.Host = "localhost"
 	Dbconf.Pass = "dummypass"
 	Dbconf.Port = 3306
@@ -108,13 +111,23 @@ func UnsetEnvironment() {
 	os.Remove("/tmp/shinyRuntimeFile")
 }
 
+func randWord(n int) string {
+	word := make([]byte, n)
+	rand.Read(word)
+
+	wordString := hex.EncodeToString(word)
+	log.Println(wordString)
+
+	return wordString
+}
+
 func TestInsertFunc(t *testing.T) {
 	SetEnvironment()
 	defer UnsetEnvironment()
 	var input term.TerminalIn
 	termid = uuid.New().String()
 
-	input.Name = "Kasir jogja47"
+	input.Name = randWord(5)
 	input.Location = "Apt. 954"
 	input.TerminalId = termid
 
@@ -211,7 +224,7 @@ func TestTerminalPutPositive(t *testing.T) {
 	defer UnsetEnvironment()
 	var input term.TerminalUpdate
 
-	input.Name = "Kasir jogja47"
+	input.Name = randWord(8)
 	input.Location = "Suite 094"
 	// input.TerminalId = termid
 
@@ -280,29 +293,90 @@ func TestContactDeletePositive(t *testing.T) {
 	assert.Equal(t, string(termJson), strings.TrimSpace(rec.Body.String()))
 }
 
+var tokens string
+
 func TestLoginFunc(t *testing.T) {
 	SetEnvironment()
 	defer UnsetEnvironment()
 
+	var tokenResponse term.TokenResponse
+	var err error
+
 	uv := url.Values{}
 	uv.Add("grant_type", "password")
-	uv.Add("username", "septianw")
+	uv.Add("username", "reba63")
 	uv.Add("password", "password")
-	uv.Add("client_id", "01d23d2208cc001ceee0b53bf2a8a306476d7f78")
+	uv.Add("client_id", "2008e223b4c077f8eaf8e68a23546220")
 
 	// logparam := strings.NewReader(uv.Encode())
 
 	q := quest{
 		payload{"POST", "/api/v1/terminal/login", bytes.NewBuffer([]byte(uv.Encode()))},
 		headers{
-			header{"X-terminal": "02162aaa-1719-39a3-adef-f2430324f56a"},
+			header{"X-terminal": "2e9ba49a-9a42-4cbc-9f66-4359b22b5ff4"},
 			header{"Content-Type": "application/x-www-form-urlencoded"},
 		},
-		expectation{201, "contact post"},
+		expectation{200, "contact post"},
 	}
 
 	rec := doTheTest(q.pload, q.heads)
 
+	assert.Equal(t, q.expect.Code, rec.Code)
+
+	tokens = rec.Body.String()
+
+	t.Logf("\n%+v\n", tokens)
+
+	err = json.Unmarshal([]byte(tokens), &tokenResponse)
+	if err != nil {
+		t.Logf("\n%+v\n", err)
+		t.Fail()
+	}
+
+	if (term.TokenResponse{}) == tokenResponse {
+		t.Logf("\n%+v\n", tokenResponse)
+		t.Fail()
+	}
+
+	t.Log(rec.Body.String())
+
 	t.Log(rec)
 	t.Log(uv.Encode())
+}
+
+func TestRefreshTokenFunc(t *testing.T) {
+	SetEnvironment()
+	defer UnsetEnvironment()
+	var tokenResponse term.TokenResponse
+
+	t.Logf("%+v", tokens)
+
+	err := json.Unmarshal([]byte(tokens), &tokenResponse)
+	if err != nil {
+		t.Fail()
+	}
+
+	t.Logf("\n%+v\n", tokenResponse)
+
+	uv := url.Values{}
+	uv.Add("grant_type", "refresh_token")
+	uv.Add("refresh_token", tokenResponse.RefreshToken)
+	uv.Add("client_id", "2008e223b4c077f8eaf8e68a23546220")
+
+	// logparam := strings.NewReader(uv.Encode())
+
+	q := quest{
+		payload{"POST", "/api/v1/terminal/login", bytes.NewBuffer([]byte(uv.Encode()))},
+		headers{
+			header{"X-terminal": "2e9ba49a-9a42-4cbc-9f66-4359b22b5ff4"},
+			header{"Content-Type": "application/x-www-form-urlencoded"},
+		},
+		expectation{200, "contact post"},
+	}
+
+	rec := doTheTest(q.pload, q.heads)
+
+	assert.Equal(t, q.expect.Code, rec.Code)
+
+	tokens = rec.Body.String()
 }

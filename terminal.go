@@ -1,10 +1,12 @@
 package terminal
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
+	"runtime/debug"
 	"strings"
 
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	// "github.com/gin-gonic/gin"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 
 	// "strconv"
 	"time"
@@ -51,12 +54,21 @@ type TerminalUpdate struct {
 
 type Grant struct {
 	GrantType    string `form:"grant_type"`
+	RefreshToken string `form:"refresh_token"`
 	Username     string `form:"username"`
 	Password     string `form:"password"`
 	ClientId     string `form:"client_id"`
 	ClientSecret string `form:"client_secret"`
 	Scope        string `form:"scope"`
 }
+
+type ClientCredential struct {
+	ClientId     string
+	ClientSecret string
+	ClientName   string
+}
+
+type MarkRecordAsObsoleteFn func() (err error)
 
 /*
 {
@@ -291,12 +303,14 @@ func DeleteTerminal(id string) (terminal TerminalOut, err error) {
 	return
 }
 
-func verify(sbTerm strings.Builder) (verified bool, err error) {
+func verify(sbTerm strings.Builder, obsolete MarkRecordAsObsoleteFn) (verified bool, err error) {
 	var count uint
 	verified = false
 
 	log.Println(sbTerm.String())
 	rows, err := Query(sbTerm.String())
+	log.Println(sbTerm.String())
+	defer rows.Close()
 	if err != nil {
 		return
 	}
@@ -304,9 +318,15 @@ func verify(sbTerm strings.Builder) (verified bool, err error) {
 		rows.Scan(&count)
 	}
 
+	// obsolete()
+
 	log.Printf("Record Found: %d\nverified: %+v", count, (count > 0))
 	if count > 0 {
-		verified = true
+		err = obsolete()
+		log.Println(err)
+		if err == nil {
+			verified = true
+		}
 	}
 
 	return
@@ -328,7 +348,7 @@ func VerifyClients(clientId, clientSecret string) (verified bool, err error) {
 		}
 	}
 
-	return verify(sbTerm)
+	return verify(sbTerm, func() error { return nil })
 }
 
 func VerifyTerminal(terminalId string) (verified bool, err error) {
@@ -340,19 +360,216 @@ func VerifyTerminal(terminalId string) (verified bool, err error) {
 		return
 	}
 
-	return verify(sbTerm)
+	return verify(sbTerm, func() error { return nil })
 }
 
-func VerifyAccessToken(accessToken string) (verified bool, err error) {
+func VerifyAccessToken(accessToken, terminalId string) (verified bool, err error) {
 	var sbTerm strings.Builder
+	// var count uint64
+	verified = false
 
-	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT COUNT(*) count
-	FROM accesstoken WHERE used = 0 AND token = '%s'`, accessToken))
+	t := time.Now()
+	year, month, day := t.Date()
+	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
+
+	startString := RangeStart.Format("2006-01-02 15:04:05")
+	endString := RangeEnd.Format("2006-01-02 15:04:05")
+
+	// get valid refresh token associated with
+	_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
+from tokenusage as tu
+join accesstoken as act on act.tokenusage_usageid = tu.usageid
+where `+"`created`"+` between '%s' and '%s'
+and tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
+		startString, endString, terminalId, accessToken))
 	if err != nil {
 		return
 	}
 
-	return verify(sbTerm)
+	fmt.Println(sbTerm.String())
+	// sbTerm.Reset()
+
+	// FIXME
+	return verify(sbTerm, func() error {
+		debug.PrintStack()
+		log.Println(terminalId, accessToken)
+		var timeout, usageid, delta int64
+		var created, upstring string
+		var updated sql.NullString
+		var expired uint8 = 0
+		t := time.Now()
+
+		sbTerm.Reset()
+		sbTerm.WriteString(fmt.Sprintf(`SELECT tu.usageid, act.timeout, tu.created, tu.updated
+		FROM tokenusage AS tu
+		JOIN accesstoken AS act ON act.tokenusage_usageid = tu.usageid
+		WHERE tu.terminal_terminalid = '%s'
+		AND act.token = '%s'`, terminalId, accessToken))
+		log.Println(sbTerm.String())
+		rows, err := Query(sbTerm.String())
+		if err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			err := rows.Scan(&usageid, &timeout, &created, &updated)
+			if updated.Valid {
+				upstring = updated.String
+			}
+			common.ErrHandler(err)
+		}
+		rows.Close()
+		sbTerm.Reset()
+
+		tCreated, err := time.Parse("2006-01-02T15:04:05Z", created)
+		if err != nil {
+			return err
+		}
+
+		upstring = t.Format("2006-01-02 15:04:05")
+
+		// ini masih pakai unix timestamp
+		// asumsinya timeout itu far future.
+		log.Println(time.Unix(timeout, 0).Format("2006"))
+		if strings.Compare(time.Unix(timeout, 0).Format("2006"), "2019") == 0 {
+			delta = timeout - t.Unix()
+			if delta < 0 {
+				expired = 1
+			}
+		} else {
+			age := t.Sub(tCreated)
+			tokenAge := tCreated.Add(time.Duration(timeout) * time.Second)
+			log.Printf("\nage: %+v, tokenAge: %+v, created: %+v, timeout: %+v, now: %+v", age.Seconds(), tokenAge, tCreated.Unix(), timeout, t.Unix())
+			deltaDur := tokenAge.Sub(time.Now())
+			log.Printf("\ntokenage - t: %+v\n", deltaDur.Hours())
+			if int64(deltaDur.Seconds()) > 86400 {
+				delta = 86400
+			} else {
+				delta = int64(deltaDur.Seconds())
+			}
+			if delta <= 0 {
+				expired = 1
+			}
+		}
+		log.Println(delta)
+
+		sbTerm.WriteString(fmt.Sprintf("update tokenusage as tu, accesstoken as act"+
+			" set act.timeout = %d, tu.updated = '%s', tu.expired = %d"+
+			" where tu.usageid = act.tokenusage_usageid and tu.terminal_terminalid = '%s'"+
+			" and act.token = '%s'", delta, upstring, expired, terminalId, accessToken))
+		log.Println(sbTerm.String())
+
+		_, err = Exec(sbTerm.String())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+func VerifyRefreshToken(refreshToken, terminalId string) (verified bool, err error) {
+	var sbTerm strings.Builder
+	// var count uint64
+	verified = false
+
+	t := time.Now()
+	year, month, day := t.Date()
+	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
+
+	startString := RangeStart.Format("2006-01-02 15:04:05")
+	endString := RangeEnd.Format("2006-01-02 15:04:05")
+
+	// get valid refresh token associated with
+	_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
+from tokenusage as tu
+join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
+where `+"`created`"+` between '%s' and '%s'
+and tu.terminal_terminalid = '%s' and rt.timeout > %d`,
+		startString, endString, terminalId, time.Now().Unix()))
+	if err != nil {
+		return
+	}
+
+	// FIXME
+	return verify(sbTerm, func() error {
+		debug.PrintStack()
+		log.Println(terminalId, refreshToken)
+		var timeout, usageid, delta int64
+		var created, upstring string
+		var updated sql.NullString
+		var expired uint8 = 0
+		t := time.Now()
+
+		sbTerm.Reset()
+		sbTerm.WriteString(fmt.Sprintf(`SELECT tu.usageid, rt.timeout, tu.created, tu.updated
+		FROM tokenusage AS tu
+		JOIN refreshtoken AS rt ON rt.tokenusage_usageid = tu.usageid
+		WHERE tu.terminal_terminalid = '%s'
+		AND rt.token = '%s'`, terminalId, refreshToken))
+		log.Println(sbTerm.String())
+		rows, err := Query(sbTerm.String())
+		if err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			err := rows.Scan(&usageid, &timeout, &created, &updated)
+			if updated.Valid {
+				upstring = updated.String
+			}
+			common.ErrHandler(err)
+		}
+		rows.Close()
+		sbTerm.Reset()
+
+		tCreated, err := time.Parse("2006-01-02T15:04:05Z", created)
+		if err != nil {
+			return err
+		}
+
+		upstring = t.Format("2006-01-02 15:04:05")
+
+		// ini masih pakai unix timestamp
+		// asumsinya timeout itu far future.
+		log.Println(time.Unix(timeout, 0).Format("2006"))
+		if strings.Compare(time.Unix(timeout, 0).Format("2006"), "2019") == 0 {
+			delta = timeout - t.Unix()
+			if delta < 0 {
+				expired = 1
+			}
+		} else {
+			age := t.Sub(tCreated)
+			tokenAge := tCreated.Add(time.Duration(timeout) * time.Second)
+			log.Printf("\nage: %+v, tokenAge: %+v, created: %+v, timeout: %+v, now: %+v", age.Seconds(), tokenAge, tCreated.Unix(), timeout, t.Unix())
+			deltaDur := tokenAge.Sub(time.Now())
+			log.Printf("\ntokenage - t: %+v\n", deltaDur.Hours())
+			if int64(deltaDur.Seconds()) > 86400 {
+				delta = 86400
+			} else {
+				delta = int64(deltaDur.Seconds())
+			}
+			if delta <= 0 {
+				expired = 1
+			}
+		}
+		log.Println(delta)
+
+		sbTerm.WriteString(fmt.Sprintf("update tokenusage as tu, refreshtoken as rt"+
+			" set rt.timeout = %d, tu.updated = '%s', tu.expired = %d"+
+			" where tu.usageid = rt.tokenusage_usageid and tu.terminal_terminalid = '%s'"+
+			" and rt.token = '%s'", delta, upstring, expired, terminalId, refreshToken))
+		log.Println(sbTerm.String())
+
+		_, err = Exec(sbTerm.String())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err error) {
@@ -360,8 +577,8 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 	var sbAkey, sbEkey, sbQkey strings.Builder
 	var tokenUsageId int64
 
-	accessTokenExpired := (60 * 60 * 24) + time.Now().Unix()
-	refreshTokenExpired := (60 * 60 * 24 * 3) + time.Now().Unix()
+	accessTokenExpired := (60 * 60 * 24)
+	refreshTokenExpired := (60 * 60 * 24 * 3)
 
 	accessExpired := fmt.Sprintf("%d", accessTokenExpired)
 	refreshExpired := fmt.Sprintf("%d", refreshTokenExpired)
@@ -381,12 +598,41 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 
 	/*users*/
 	// _, err = usr.FindUser(usr.UserIn{Uname: grant.Username})
+	// kalau refresh token dan tanpa username
+	if (strings.Compare(grant.Username, "") == 0) &&
+		(strings.Compare(grant.GrantType, "refresh_token") == 0) {
+		sbQkey.WriteString(fmt.Sprintf(`SELECT tu.user_uname FROM tokenusage as tu
+JOIN refreshtoken AS rt ON rt.tokenusage_usageid = tu.usageid
+WHERE rt.token = '%s'`, grant.RefreshToken))
+
+		rows, err := Query(sbQkey.String())
+		if err != nil {
+			return response, err
+		}
+
+		for rows.Next() {
+			rows.Scan(&grant.Username)
+		}
+		rows.Close()
+		sbQkey.Reset()
+
+		sbQkey.WriteString(fmt.Sprintf(`UPDATE tokenusage AS tu, refreshtoken AS rt SET tu.expired = 1
+WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToken))
+		log.Printf("\n%+v\n", sbQkey.String())
+		_, err = Exec(sbQkey.String())
+		if err != nil {
+			return response, err
+		}
+		sbQkey.Reset()
+	}
 	users, err := usr.FindUser(usr.UserIn{Uname: grant.Username})
+	log.Println(grant.Username)
 	log.Println(err)
+	log.Printf("\n%+v\n", users)
 	log.Println(accessToken, refreshToken)
 
 	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage
-	(user_uid, user_uname, terminal_terminalid, date)
+	(user_uid, user_uname, terminal_terminalid, created)
 	VALUES (%d, '%s', '%s', '%s')`,
 		users[0].Uid, users[0].Uname, terminalId, time.Now().Format("2006-01-02 15:04:05")))
 	qTokenUsage := sbQkey.String()
@@ -404,7 +650,7 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 
 	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO accesstoken
 	(token, timeout, used, tokenusage_usageid)
-	VALUES ('%s', %d, 0, %d)`, accessToken, accessTokenExpired, tokenUsageId))
+	VALUES ('%s', %d, 1, %d)`, accessToken, accessTokenExpired, tokenUsageId))
 	qAccessToken := sbQkey.String()
 	fmt.Println(qAccessToken)
 	_, err = Exec(qAccessToken)
@@ -415,7 +661,7 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 
 	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
 	(token, timeout, used, tokenusage_usageid)
-	VALUES ('%s', %d, 0, %d)`, refreshToken, refreshTokenExpired, tokenUsageId))
+	VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, tokenUsageId))
 	qRefreshToken := sbQkey.String()
 	fmt.Println(qRefreshToken)
 	_, err = Exec(qRefreshToken)
@@ -423,7 +669,7 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 		return
 	}
 
-	response.ExpiresIn = 60 * 60 * 24
+	response.ExpiresIn = uint64(accessTokenExpired)
 	response.TokenType = "bearer"
 	response.AccessToken = accessToken
 	response.RefreshToken = refreshToken
@@ -451,7 +697,7 @@ func FetchToken(terminalId string, grant Grant) (response TokenResponse, err err
 from tokenusage as tu
 join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
 join accesstoken as act on act.tokenusage_usageid = tu.usageid
-where `+"`date`"+` between '%s' and '%s'
+where `+"`created`"+` between '%s' and '%s'
 and tu.terminal_terminalid = '%s' and tu.user_uname = '%s'`,
 		startString, endString, terminalId, grant.Username))
 
@@ -505,6 +751,127 @@ func IssueTokens(terminalId string, grant Grant) (response TokenResponse, err er
 		response = resg
 	} else {
 		response = res
+	}
+
+	return
+}
+
+func InsertClientCredential(clientName string) (clientOut ClientCredential, err error) {
+	var sbClient strings.Builder
+	var rid, rsec []byte
+	var clients []ClientCredential
+
+	rid = make([]byte, 16)
+	rsec = make([]byte, 32)
+
+	_, err = rand.Read(rid)
+	if err != nil {
+		return
+	}
+	_, err = rand.Read(rsec)
+	if err != nil {
+		return
+	}
+
+	clients, err = GetClientCredentials(clientName)
+	if err != nil {
+		return
+	}
+
+	if len(clients) != 0 {
+		log.Printf("\nclients: %+v\n", clients)
+		err = errors.New("Client with the same name found, client name need to be unique")
+		return
+	}
+
+	sbClient.WriteString(fmt.Sprintf(`INSERT INTO clientcredential (clientid, clientsecret, clientname, deleted)
+	VALUES ('%s', '%s', '%s', 0)`, hex.EncodeToString(rid), hex.EncodeToString(rsec), clientName))
+
+	_, err = Exec(sbClient.String())
+	if err != nil {
+		return
+	}
+
+	clients, err = GetClientCredentials(clientName)
+	if err != nil {
+		return
+	}
+
+	if len(clients) == 0 {
+		err = errors.New("Insert client credential fail.")
+		return
+	}
+
+	clientOut = clients[0]
+
+	return
+}
+
+func GetClientCredentials(clientName string) (clientOuts []ClientCredential, err error) {
+	var sbClient strings.Builder
+	var clientOut ClientCredential
+	var clName sql.NullString
+
+	sbClient.WriteString(`SELECT clientid, clientsecret, clientname FROM clientcredential WHERE (deleted = 0 OR deleted IS NULL)`)
+
+	if strings.Compare(clientName, "") != 0 {
+		sbClient.WriteString(fmt.Sprintf(` AND clientname = '%s'`, clientName))
+	}
+	log.Println(sbClient.String())
+
+	rows, err := Query(sbClient.String())
+	if err != nil {
+		return
+	}
+
+	for rows.Next() {
+		err = rows.Scan(&clientOut.ClientId, &clientOut.ClientSecret, &clName)
+		if err != nil {
+			return
+			break
+		}
+		if clName.Valid {
+			clientOut.ClientName = clName.String
+		}
+		clientOuts = append(clientOuts, clientOut)
+	}
+
+	return
+}
+
+func DeleteClientCredentials(clientName string) (clientOuts []ClientCredential, err error) {
+	var sbClient strings.Builder
+
+	if strings.Compare(clientName, "") == 0 {
+		err = errors.New("clientName cannot be empty.")
+		return
+	}
+
+	clients, err := GetClientCredentials(clientName)
+	if err != nil {
+		return
+	}
+
+	if len(clients) > 1 {
+		log.Printf("\ndelete target client: %+v\n", clients)
+		err = errors.New("Duplicate client credential found, delete failed.")
+		return
+	}
+
+	if len(clients) == 0 {
+		err = errors.New("No client credential found, delete failed.")
+		return
+	}
+
+	sbClient.WriteString(fmt.Sprintf(`UPDATE clientcredential SET deleted = 1 WHERE clientname = '%s'`, clientName))
+
+	_, err = Exec(sbClient.String())
+	if err != nil {
+		return
+	}
+
+	if len(clients) == 1 {
+		clientOuts = clients
 	}
 
 	return

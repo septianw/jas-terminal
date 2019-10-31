@@ -171,6 +171,7 @@ func PostLoginFunc(c *gin.Context) {
 
 	if err = c.ShouldBind(&grant); err != nil {
 		common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE, err)
+		c.Abort()
 		return
 	}
 
@@ -178,6 +179,13 @@ func PostLoginFunc(c *gin.Context) {
 
 	switch grant.GrantType {
 	case "password":
+		if (strings.Compare(grant.Username, "") == 0) ||
+			(strings.Compare(grant.Password, "") == 0) {
+			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
+				errors.New("username and or password missing."))
+			c.Abort()
+			return
+		}
 		user.Uname = grant.Username
 
 		passVerified, err = usr.VerifyUser(grant.Username, grant.Password)
@@ -214,6 +222,14 @@ func PostLoginFunc(c *gin.Context) {
 		}
 		break
 	case "refresh_token":
+
+		if strings.Compare(grant.RefreshToken, "") == 0 {
+			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
+				errors.New("refresh_token missing."))
+			c.Abort()
+			return
+		}
+
 		clientVerified, err = term.VerifyClients(grant.ClientId, grant.ClientSecret)
 		terminal = c.GetHeader("X-terminal")
 		if err != nil {
@@ -243,13 +259,37 @@ func PostLoginFunc(c *gin.Context) {
 		}
 
 		break
-	default:
-		common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Currently only accept password grant."))
-	}
+	case "client_credentials":
+		if (strings.Compare(grant.ClientId, "") == 0) ||
+			(strings.Compare(grant.ClientSecret, "") == 0) {
+			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
+				errors.New("client_id and or client_secret missing."))
+			c.Abort()
+			return
+		}
 
-	if grant.GrantType == "password" {
-	} else {
+		clientVerified, err := term.VerifyClients(grant.ClientId, grant.ClientSecret)
+		terminal = c.GetHeader("X-terminal")
+		if err != nil {
+			// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
+			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+			return
+		}
+
+		if clientVerified {
+			tokenResponse, err = term.GenerateTokens(terminal, grant)
+			if err != nil {
+				// FIXME: cek, apakah error code ini sudah benar atau belum.
+				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
+				c.Abort()
+				return
+			}
+			c.JSON(http.StatusOK, tokenResponse)
+		}
+	default:
+		common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Grant type you need is not a grant type we require."))
 	}
+	common.SendHttpError(c, common.PAGE_NOT_FOUND_CODE, errors.New("You find something we don't have."))
 }
 
 func GetTerminalIdHandler(c *gin.Context) {

@@ -53,7 +53,7 @@ type TerminalUpdate struct {
 }
 
 type Grant struct {
-	GrantType    string `form:"grant_type"`
+	GrantType    string `form:"grant_type" binding:"required"`
 	RefreshToken string `form:"refresh_token"`
 	Username     string `form:"username"`
 	Password     string `form:"password"`
@@ -332,6 +332,7 @@ func verify(sbTerm strings.Builder, obsolete MarkRecordAsObsoleteFn) (verified b
 	return
 }
 
+// FIXME ini harusnya diperlakukan yang sama seperti verify password.
 func VerifyClients(clientId, clientSecret string) (verified bool, err error) {
 	var sbTerm strings.Builder
 
@@ -368,21 +369,12 @@ func VerifyAccessToken(accessToken, terminalId string) (verified bool, err error
 	// var count uint64
 	verified = false
 
-	t := time.Now()
-	year, month, day := t.Date()
-	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
-	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
-
-	startString := RangeStart.Format("2006-01-02 15:04:05")
-	endString := RangeEnd.Format("2006-01-02 15:04:05")
-
 	// get valid refresh token associated with
 	_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
 from tokenusage as tu
 join accesstoken as act on act.tokenusage_usageid = tu.usageid
-where `+"`created`"+` between '%s' and '%s'
-and tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
-		startString, endString, terminalId, accessToken))
+where tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
+		terminalId, accessToken))
 	if err != nil {
 		return
 	}
@@ -474,21 +466,12 @@ func VerifyRefreshToken(refreshToken, terminalId string) (verified bool, err err
 	// var count uint64
 	verified = false
 
-	t := time.Now()
-	year, month, day := t.Date()
-	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
-	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
-
-	startString := RangeStart.Format("2006-01-02 15:04:05")
-	endString := RangeEnd.Format("2006-01-02 15:04:05")
-
 	// get valid refresh token associated with
-	_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
-from tokenusage as tu
-join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
-where `+"`created`"+` between '%s' and '%s'
-and tu.terminal_terminalid = '%s' and rt.timeout > %d`,
-		startString, endString, terminalId, time.Now().Unix()))
+	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT COUNT(*) AS count
+FROM tokenusage AS tu
+JOIN refreshtoken AS rt ON rt.tokenusage_usageid = tu.usageid
+WHERE tu.terminal_terminalid = '%s' AND tu.expired = 0 AND rt.token = '%s'`,
+		terminalId, refreshToken))
 	if err != nil {
 		return
 	}
@@ -546,8 +529,8 @@ and tu.terminal_terminalid = '%s' and rt.timeout > %d`,
 			log.Printf("\nage: %+v, tokenAge: %+v, created: %+v, timeout: %+v, now: %+v", age.Seconds(), tokenAge, tCreated.Unix(), timeout, t.Unix())
 			deltaDur := tokenAge.Sub(time.Now())
 			log.Printf("\ntokenage - t: %+v\n", deltaDur.Hours())
-			if int64(deltaDur.Seconds()) > 86400 {
-				delta = 86400
+			if int64(deltaDur.Seconds()) > 259200 {
+				delta = 259200
 			} else {
 				delta = int64(deltaDur.Seconds())
 			}
@@ -572,10 +555,48 @@ and tu.terminal_terminalid = '%s' and rt.timeout > %d`,
 	})
 }
 
+// Set token expired.
+func SetExpired(token, tokenType string) (err error) {
+	var sbToken strings.Builder
+
+	/*
+		update accesstoken as t, tokenusage as tu
+		set tu.expired = 1, tu.updated = '1982-02-06 22:54:43'
+		where t.tokenusage_usageid = tu.usageid
+			and t.token = '01d69673fc28382ded95d9da8c853aacc914fd97';
+	*/
+
+	switch tokenType {
+	case "refresh_token":
+		sbToken.WriteString("UPDATE accesstoken AS t, tokenusage AS tu")
+		break
+	case "access_token":
+		sbToken.WriteString("UPDATE refreshtoken AS t, tokenusage AS tu")
+		break
+	default:
+		err = errors.New("Sorry, only access_token of refresh_token that can be set expired.")
+		return
+	}
+
+	sbToken.WriteString(fmt.Sprintf(" SET tu.expired = 1, tu.updated = '%s'"+
+		" WHERE t.tokenusage_usageid = tu.usageid AND t.token = '%s'",
+		time.Now().Format("2006-01-02 15:04:05"), token))
+
+	log.Printf(sbToken.String())
+
+	_, err = Exec(sbToken.String())
+	if err != nil {
+		return err
+	}
+
+	return
+}
+
 func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err error) {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	var sbAkey, sbEkey, sbQkey strings.Builder
 	var tokenUsageId int64
+	var queryAccess, queryRefresh string
 
 	accessTokenExpired := (60 * 60 * 24)
 	refreshTokenExpired := (60 * 60 * 24 * 3)
@@ -625,46 +646,82 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		}
 		sbQkey.Reset()
 	}
-	users, err := usr.FindUser(usr.UserIn{Uname: grant.Username})
-	log.Println(grant.Username)
-	log.Println(err)
-	log.Printf("\n%+v\n", users)
-	log.Println(accessToken, refreshToken)
 
-	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage
-	(user_uid, user_uname, terminal_terminalid, created)
-	VALUES (%d, '%s', '%s', '%s')`,
-		users[0].Uid, users[0].Uname, terminalId, time.Now().Format("2006-01-02 15:04:05")))
-	qTokenUsage := sbQkey.String()
-	fmt.Println(qTokenUsage)
-	result, err := Exec(qTokenUsage)
+	if (strings.Compare(grant.Username, "") == 0) &&
+		(strings.Compare(grant.GrantType, "client_credentials") == 0) {
+		sbQkey.Reset()
+		// INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `date`)
+		// VALUES ('%s', '%s', '%s');
+
+		sbQkey.WriteString(fmt.Sprintf("INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `date`)"+
+			"VALUES ('%s', '%s', '%s')", grant.ClientId, terminalId, time.Now().Format("2006-01-02 15:04:05")))
+		result, err := Exec(sbQkey.String())
+		if err != nil {
+			return response, err
+		}
+
+		credentialusageUsageid, err := result.LastInsertId()
+		if err != nil {
+			return response, err
+		}
+		sbQkey.Reset()
+
+		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO accesstoken
+		(token, timeout, used, credentialusage_credentialusageid)
+		VALUES ('%s', %d, 1, %d)`, accessToken, accessTokenExpired, credentialusageUsageid))
+		queryAccess = sbQkey.String()
+		sbQkey.Reset()
+
+		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
+		(token, timeout, used, credentialusage_credentialusageid)
+		VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, credentialusageUsageid))
+		queryAccess = sbQkey.String()
+		// insert into credentialusage (clientcredential_clientid, terminal_terminalid, date)
+		// values ('%s', '%s', '%s')
+	} else {
+		users, err := usr.FindUser(usr.UserIn{Uname: grant.Username})
+		log.Println(grant.Username)
+		log.Println(err)
+		log.Printf("\n%+v\n", users)
+		log.Println(accessToken, refreshToken)
+
+		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage
+		(user_uid, user_uname, terminal_terminalid, created)
+		VALUES (%d, '%s', '%s', '%s')`,
+			users[0].Uid, users[0].Uname, terminalId, time.Now().Format("2006-01-02 15:04:05")))
+		qTokenUsage := sbQkey.String()
+		fmt.Println(qTokenUsage)
+		result, err := Exec(qTokenUsage)
+		if err != nil {
+			return response, err
+		}
+		tokenUsageId, err = result.LastInsertId()
+		if err != nil {
+			return response, err
+		}
+		sbQkey.Reset()
+		log.Println(tokenUsageId)
+
+		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO accesstoken
+		(token, timeout, used, tokenusage_usageid)
+		VALUES ('%s', %d, 1, %d)`, accessToken, accessTokenExpired, tokenUsageId))
+		queryAccess = sbQkey.String()
+		sbQkey.Reset()
+
+		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
+		(token, timeout, used, tokenusage_usageid)
+		VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, tokenUsageId))
+		queryRefresh = sbQkey.String()
+
+	}
+	fmt.Println(queryAccess)
+	_, err = Exec(queryAccess)
 	if err != nil {
 		return
 	}
-	tokenUsageId, err = result.LastInsertId()
-	if err != nil {
-		return
-	}
-	sbQkey.Reset()
-	log.Println(tokenUsageId)
 
-	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO accesstoken
-	(token, timeout, used, tokenusage_usageid)
-	VALUES ('%s', %d, 1, %d)`, accessToken, accessTokenExpired, tokenUsageId))
-	qAccessToken := sbQkey.String()
-	fmt.Println(qAccessToken)
-	_, err = Exec(qAccessToken)
-	if err != nil {
-		return
-	}
-	sbQkey.Reset()
-
-	sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
-	(token, timeout, used, tokenusage_usageid)
-	VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, tokenUsageId))
-	qRefreshToken := sbQkey.String()
-	fmt.Println(qRefreshToken)
-	_, err = Exec(qRefreshToken)
+	fmt.Println(queryRefresh)
+	_, err = Exec(queryRefresh)
 	if err != nil {
 		return
 	}
@@ -756,6 +813,7 @@ func IssueTokens(terminalId string, grant Grant) (response TokenResponse, err er
 	return
 }
 
+// FIXME ini harusnya diperlakukan sama seperti username dan password.
 func InsertClientCredential(clientName string) (clientOut ClientCredential, err error) {
 	var sbClient strings.Builder
 	var rid, rsec []byte

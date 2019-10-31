@@ -389,3 +389,27 @@ func TestVerifyRefreshToken(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestSetExpired(t *testing.T) {
+	SetEnvironment()
+	defer UnsetEnvironment()
+	var err error
+	err = SetExpired(Token.AccessToken, "access_token")
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+
+	err = SetExpired(Token.RefreshToken, "refresh_token")
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+
+	err = SetExpired(Token.AccessToken, "fail")
+	t.Log(err)
+	if err == nil {
+		t.Log(err)
+		t.Fail()
+	}
+}

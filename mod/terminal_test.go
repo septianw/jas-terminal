@@ -376,7 +376,55 @@ func TestRefreshTokenFunc(t *testing.T) {
 
 	rec := doTheTest(q.pload, q.heads)
 
+	log.Printf("\n%+v\n", rec)
+
 	assert.Equal(t, q.expect.Code, rec.Code)
+
+	err = json.Unmarshal(rec.Body.Bytes(), &tokenResponse)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+	if (term.TokenResponse{}) == tokenResponse {
+		t.Log(err)
+		t.Fail()
+	}
+
+	tokens = rec.Body.String()
+}
+
+func TestClientCredentialFunc(t *testing.T) {
+	SetEnvironment()
+	defer UnsetEnvironment()
+	var tokenResponse term.TokenResponse
+	var err error
+
+	uv := url.Values{}
+	uv.Add("grant_type", "client_credentials")
+	uv.Add("client_id", "2008e223b4c077f8eaf8e68a23546220")
+
+	q := quest{
+		payload{"POST", "/api/v1/terminal/login", bytes.NewBuffer([]byte(uv.Encode()))},
+		headers{
+			header{"X-terminal": "2e9ba49a-9a42-4cbc-9f66-4359b22b5ff4"},
+			header{"Content-Type": "application/x-www-form-urlencoded"},
+		},
+		expectation{200, "contact post"},
+	}
+
+	rec := doTheTest(q.pload, q.heads)
+
+	assert.Equal(t, q.expect.Code, rec.Code)
+
+	err = json.Unmarshal(rec.Body.Bytes(), &tokenResponse)
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+	if (term.TokenResponse{}) == tokenResponse {
+		t.Log(err)
+		t.Fail()
+	}
 
 	tokens = rec.Body.String()
 }

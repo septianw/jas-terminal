@@ -12,6 +12,20 @@ CHANGE COLUMN `date` `created` DATETIME NOT NULL ,
 ADD COLUMN `updated` DATETIME NULL AFTER `created`,
 ADD COLUMN `expired` TINYINT(1) NULL DEFAULT 0 AFTER `updated`;
 
+ALTER TABLE `credentialusage` 
+ADD COLUMN `credentialusageid` INT NOT NULL AUTO_INCREMENT FIRST,
+DROP PRIMARY KEY,
+ADD PRIMARY KEY (`credentialusageid`, `clientcredential_clientid`, `terminal_terminalid`),
+ADD UNIQUE INDEX `credentialusageid_UNIQUE` (`credentialusageid` ASC);
+
+ALTER TABLE `accesstoken` 
+ADD COLUMN `credentialusage_credentialusageid` INT NULL DEFAULT 0 AFTER `tokenusage_usageid`;
+
+ALTER TABLE `refreshtoken` 
+ADD COLUMN `credentialusage_credentialusageid` INT NULL DEFAULT 0 AFTER `tokenusage_usageid`;
+
+
+
 
 -- +migrate Down
 ALTER TABLE `clientcredential` 
@@ -26,4 +40,17 @@ ALTER TABLE `tokenusage`
 DROP COLUMN `expired`,
 DROP COLUMN `updated`,
 CHANGE COLUMN `created` `date` DATETIME NOT NULL ;
+
+ALTER TABLE `credentialusage` 
+DROP COLUMN `credentialusageid`,
+DROP PRIMARY KEY,
+ADD PRIMARY KEY (`clientcredential_clientid`, `terminal_terminalid`),
+DROP INDEX `credentialusageid_UNIQUE` ;
+
+ALTER TABLE `accesstoken` 
+DROP COLUMN `credentialusage_credentialusageid`;
+
+ALTER TABLE `refreshtoken` 
+DROP COLUMN `credentialusage_credentialusageid`;
+
 

@@ -380,6 +380,8 @@ func TestRefreshTokenFunc(t *testing.T) {
 
 	assert.Equal(t, q.expect.Code, rec.Code)
 
+	// log.Printf("\n%+v\n", rec)
+
 	err = json.Unmarshal(rec.Body.Bytes(), &tokenResponse)
 	if err != nil {
 		t.Log(err)

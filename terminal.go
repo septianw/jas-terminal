@@ -672,10 +672,11 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		queryAccess = sbQkey.String()
 		sbQkey.Reset()
 
+		// FIXME INI MENGHASILKAN QUERY KOSONG.
 		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
 		(token, timeout, used, credentialusage_credentialusageid)
 		VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, credentialusageUsageid))
-		queryAccess = sbQkey.String()
+		queryRefresh = sbQkey.String()
 		// insert into credentialusage (clientcredential_clientid, terminal_terminalid, date)
 		// values ('%s', '%s', '%s')
 	} else {
@@ -714,13 +715,13 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		queryRefresh = sbQkey.String()
 
 	}
-	fmt.Println(queryAccess)
+	log.Println(queryAccess)
 	_, err = Exec(queryAccess)
 	if err != nil {
 		return
 	}
 
-	fmt.Println(queryRefresh)
+	log.Println(queryRefresh)
 	_, err = Exec(queryRefresh)
 	if err != nil {
 		return
@@ -735,17 +736,17 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 }
 
 func FetchToken(terminalId string, grant Grant) (response TokenResponse, err error) {
-	var t time.Time
+	// var t time.Time
 	var sbQToken strings.Builder
 	var responses []TokenResponse
 
-	t = time.Now()
-	year, month, day := t.Date()
-	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
-	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
+	// t = time.Now()
+	// year, month, day := t.Date()
+	// RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+	// RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
 
-	startString := RangeStart.Format("2006-01-02 15:04:05")
-	endString := RangeEnd.Format("2006-01-02 15:04:05")
+	// startString := RangeStart.Format("2006-01-02 15:04:05")
+	// endString := RangeEnd.Format("2006-01-02 15:04:05")
 
 	sbQToken.WriteString(fmt.Sprintf(`select
 	act.token as access_token,
@@ -754,9 +755,9 @@ func FetchToken(terminalId string, grant Grant) (response TokenResponse, err err
 from tokenusage as tu
 join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
 join accesstoken as act on act.tokenusage_usageid = tu.usageid
-where `+"`created`"+` between '%s' and '%s'
+where tu.expired = 0
 and tu.terminal_terminalid = '%s' and tu.user_uname = '%s'`,
-		startString, endString, terminalId, grant.Username))
+		terminalId, grant.Username))
 
 	fmt.Println(sbQToken.String())
 

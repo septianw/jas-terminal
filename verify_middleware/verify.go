@@ -81,7 +81,7 @@ func MiddleFunc() gin.HandlerFunc {
 		c.Set("terminal", h.Terminal)
 
 		if strings.Compare(h.Authorization, "") != 0 {
-			if accessTokenVerified, err = term.VerifyAccessToken(strings.Split(h.Authorization, " ")[1]); !accessTokenVerified {
+			if accessTokenVerified, err = term.VerifyAccessToken(strings.Split(h.Authorization, " ")[1], h.Terminal); !accessTokenVerified {
 				common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
 					errors.New("Terminal not registered. Please contact authorized officer to register your terminal."))
 				c.Abort()

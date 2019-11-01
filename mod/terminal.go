@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	loc "github.com/septianw/jas-location"
 	term "github.com/septianw/jas-terminal"
+
 	usr "github.com/septianw/jas-user"
 	"github.com/septianw/jas/common"
 )
@@ -177,6 +178,8 @@ func PostLoginFunc(c *gin.Context) {
 
 	log.Printf("%+v", grant)
 
+	// c.JSON(http.StatusOK, gin.H{"message": "Pew pew pew."})
+
 	switch grant.GrantType {
 	case "password":
 		if (strings.Compare(grant.Username, "") == 0) ||
@@ -235,6 +238,7 @@ func PostLoginFunc(c *gin.Context) {
 		if err != nil {
 			// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
 			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+			c.Abort()
 			return
 		}
 
@@ -243,9 +247,12 @@ func PostLoginFunc(c *gin.Context) {
 			if err != nil {
 				// FIXME: cek, apakah error code ini sudah benar atau belum.
 				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
+				c.Abort()
 				return
 			}
 		}
+
+		log.Printf("\nClientVerified: %+v\nrefreshTokenVerified: %+v\n", clientVerified, refreshTokenVerified)
 
 		if clientVerified && refreshTokenVerified {
 			tokenResponse, err = term.GenerateTokens(terminal, grant)
@@ -256,19 +263,25 @@ func PostLoginFunc(c *gin.Context) {
 				return
 			}
 			c.JSON(http.StatusOK, tokenResponse)
+			return
+			// c.Done()
+		} else {
+			// FIXME harusnya ini unauthorized
+			common.SendHttpError(c, common.PAGE_NOT_FOUND_CODE, errors.New("wow."))
+			return
 		}
 
 		break
 	case "client_credentials":
-		if (strings.Compare(grant.ClientId, "") == 0) ||
-			(strings.Compare(grant.ClientSecret, "") == 0) {
+		if strings.Compare(grant.ClientId, "") == 0 {
 			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
-				errors.New("client_id and or client_secret missing."))
+				errors.New("client_id missing."))
 			c.Abort()
 			return
 		}
 
 		clientVerified, err := term.VerifyClients(grant.ClientId, grant.ClientSecret)
+		log.Printf("\nVerified: %+v\nerr: %+v\n", clientVerified, err)
 		terminal = c.GetHeader("X-terminal")
 		if err != nil {
 			// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
@@ -277,7 +290,10 @@ func PostLoginFunc(c *gin.Context) {
 		}
 
 		if clientVerified {
+			log.Printf("\nVerified, do the generate.\n")
 			tokenResponse, err = term.GenerateTokens(terminal, grant)
+			log.Printf("\n%+v\n", err)
+			log.Printf("\n%+v\n", tokenResponse)
 			if err != nil {
 				// FIXME: cek, apakah error code ini sudah benar atau belum.
 				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
@@ -285,11 +301,16 @@ func PostLoginFunc(c *gin.Context) {
 				return
 			}
 			c.JSON(http.StatusOK, tokenResponse)
+			return
+		} else {
+			// FIXME harusnya ini unauthorized
+			common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Client not verified."))
+			return
 		}
 	default:
 		common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Grant type you need is not a grant type we require."))
 	}
-	common.SendHttpError(c, common.PAGE_NOT_FOUND_CODE, errors.New("You find something we don't have."))
+	// common.SendHttpError(c, common.PAGE_NOT_FOUND_CODE, errors.New("You find something we don't have."))
 }
 
 func GetTerminalIdHandler(c *gin.Context) {

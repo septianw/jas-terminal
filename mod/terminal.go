@@ -221,7 +221,7 @@ func PostLoginFunc(c *gin.Context) {
 			return
 		} else {
 			// FIXME: buat status khusus untuk ini di common.
-			c.JSON(http.StatusUnauthorized, nil)
+			common.SendHttpError(c, common.FORBIDDEN_CODE, errors.New("Username and or password verification fail."))
 		}
 		break
 	case "refresh_token":
@@ -267,7 +267,7 @@ func PostLoginFunc(c *gin.Context) {
 			// c.Done()
 		} else {
 			// FIXME harusnya ini unauthorized
-			common.SendHttpError(c, common.PAGE_NOT_FOUND_CODE, errors.New("wow."))
+			common.SendHttpError(c, common.FORBIDDEN_CODE, errors.New("Refresh token verification fail."))
 			return
 		}
 
@@ -296,15 +296,20 @@ func PostLoginFunc(c *gin.Context) {
 			log.Printf("\n%+v\n", tokenResponse)
 			if err != nil {
 				// FIXME: cek, apakah error code ini sudah benar atau belum.
+				common.ErrHandler(err)
+				log.Println("no, fallback.")
 				common.SendHttpError(c, common.MODULE_OPERATION_FAIL_CODE, err)
 				c.Abort()
 				return
+			} else {
+				log.Println("ok, return.")
+				c.JSON(http.StatusOK, tokenResponse)
+				return
 			}
-			c.JSON(http.StatusOK, tokenResponse)
 			return
 		} else {
 			// FIXME harusnya ini unauthorized
-			common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Client not verified."))
+			common.SendHttpError(c, common.FORBIDDEN_CODE, errors.New("Client credential verification fail."))
 			return
 		}
 	default:

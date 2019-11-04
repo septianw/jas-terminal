@@ -73,6 +73,8 @@ func MiddleFunc() gin.HandlerFunc {
 		}
 
 		if terminalVerified, err = term.VerifyTerminal(h.Terminal); !terminalVerified {
+			log.Printf("\n$+v\n", err)
+			log.Printf("\n$+v\n", terminalVerified)
 			common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
 				errors.New("Terminal not registered. Please contact authorized officer to register your terminal."))
 			c.Abort()
@@ -82,6 +84,8 @@ func MiddleFunc() gin.HandlerFunc {
 
 		if strings.Compare(h.Authorization, "") != 0 {
 			if accessTokenVerified, err = term.VerifyAccessToken(strings.Split(h.Authorization, " ")[1], h.Terminal); !accessTokenVerified {
+				log.Printf("\n%+v\n", err)
+				log.Printf("\n%+v\n", accessTokenVerified)
 				common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
 					errors.New("Terminal not registered. Please contact authorized officer to register your terminal."))
 				c.Abort()

@@ -94,7 +94,7 @@ func SetEnvironment() {
 	var rt types.Runtime
 	var Dbconf types.Dbconf
 
-	Dbconf.Database = "jasdev"
+	Dbconf.Database = "jasdist"
 	Dbconf.Host = "localhost"
 	Dbconf.Pass = "dummypass"
 	Dbconf.Port = 3306
@@ -379,6 +379,8 @@ func TestRefreshTokenFunc(t *testing.T) {
 	log.Printf("\n%+v\n", rec)
 
 	assert.Equal(t, q.expect.Code, rec.Code)
+
+	// log.Printf("\n%+v\n", rec)
 
 	err = json.Unmarshal(rec.Body.Bytes(), &tokenResponse)
 	if err != nil {

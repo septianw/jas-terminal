@@ -366,17 +366,53 @@ func VerifyTerminal(terminalId string) (verified bool, err error) {
 
 func VerifyAccessToken(accessToken, terminalId string) (verified bool, err error) {
 	var sbTerm strings.Builder
-	// var count uint64
+	var count uint64 = 0
+	var token sql.NullString
+	var timeout, used, tokenusageUsageid, cuCredentialUsageid sql.NullInt64
+	var tokenUsage, credentialUsage bool = false, false
 	verified = false
 
-	// get valid refresh token associated with
-	_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
-from tokenusage as tu
-join accesstoken as act on act.tokenusage_usageid = tu.usageid
-where tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
-		terminalId, accessToken))
+	sbTerm.WriteString(fmt.Sprintf(`select (
+		select count(*) from accesstoken where token = '%s'
+	) as count, token, timeout, used, tokenusage_usageid, credentialusage_credentialusageid
+	from accesstoken where token = '%s'`,
+		accessToken, accessToken))
+	rows, err := Query(sbTerm.String())
+
 	if err != nil {
 		return
+	}
+
+	for rows.Next() {
+		rows.Scan(&count, &token, &timeout, &used, &tokenusageUsageid, &cuCredentialUsageid)
+	}
+	if count == 0 {
+		err = errors.New("Access token not found.")
+		return
+	} else if tokenusageUsageid.Valid {
+		// get valid access token associated with
+		tokenUsage = true
+		sbTerm.Reset()
+		_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
+		from tokenusage as tu
+		join accesstoken as act on act.tokenusage_usageid = tu.usageid
+		where tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
+			terminalId, accessToken))
+		if err != nil {
+			return
+		}
+	} else if cuCredentialUsageid.Valid {
+		// get valid access token associated with
+		credentialUsage = true
+		sbTerm.Reset()
+		_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
+		from credentialusage as cu
+		join accesstoken as act on act.credentialusage_credentialusageid = cu.credentialusageid
+		where cu.terminal_terminalid = '%s' and cu.expired = 0 AND act.token = '%s'`,
+			terminalId, accessToken))
+		if err != nil {
+			return
+		}
 	}
 
 	fmt.Println(sbTerm.String())
@@ -390,18 +426,35 @@ where tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
 		var created, upstring string
 		var updated sql.NullString
 		var expired uint8 = 0
+		var rows *sql.Rows
 		t := time.Now()
 
-		sbTerm.Reset()
-		sbTerm.WriteString(fmt.Sprintf(`SELECT tu.usageid, act.timeout, tu.created, tu.updated
-		FROM tokenusage AS tu
-		JOIN accesstoken AS act ON act.tokenusage_usageid = tu.usageid
-		WHERE tu.terminal_terminalid = '%s'
-		AND act.token = '%s'`, terminalId, accessToken))
-		log.Println(sbTerm.String())
-		rows, err := Query(sbTerm.String())
-		if err != nil {
-			return err
+		if tokenUsage {
+			sbTerm.Reset()
+			sbTerm.WriteString(fmt.Sprintf(`SELECT tu.usageid, act.timeout, tu.created, tu.updated
+			FROM tokenusage AS tu
+			JOIN accesstoken AS act ON act.tokenusage_usageid = tu.usageid
+			WHERE tu.terminal_terminalid = '%s'
+			AND act.token = '%s'`, terminalId, accessToken))
+			log.Println(sbTerm.String())
+			rows, err = Query(sbTerm.String())
+			if err != nil {
+				return err
+			}
+		}
+
+		if credentialUsage {
+			sbTerm.Reset()
+			sbTerm.WriteString(fmt.Sprintf(`SELECT cu.credentialusageid, act.timeout, cu.created, cu.updated
+			FROM credentialusage AS cu
+			JOIN accesstoken AS act ON act.credentialusage_credentialusageid = cu.credentialusageid
+			WHERE cu.terminal_terminalid = '%s' AND cu.expired = 0 AND act.token = '%s'`,
+				terminalId, accessToken))
+			log.Println(sbTerm.String())
+			rows, err = Query(sbTerm.String())
+			if err != nil {
+				return err
+			}
 		}
 
 		for rows.Next() {
@@ -446,11 +499,20 @@ where tu.terminal_terminalid = '%s' and tu.expired = 0 AND act.token = '%s'`,
 		}
 		log.Println(delta)
 
-		sbTerm.WriteString(fmt.Sprintf("update tokenusage as tu, accesstoken as act"+
-			" set act.timeout = %d, tu.updated = '%s', tu.expired = %d"+
-			" where tu.usageid = act.tokenusage_usageid and tu.terminal_terminalid = '%s'"+
-			" and act.token = '%s'", delta, upstring, expired, terminalId, accessToken))
-		log.Println(sbTerm.String())
+		if tokenUsage {
+			sbTerm.WriteString(fmt.Sprintf("update tokenusage as tu, accesstoken as act"+
+				" set act.timeout = %d, tu.updated = '%s', tu.expired = %d"+
+				" where tu.usageid = act.tokenusage_usageid and tu.terminal_terminalid = '%s'"+
+				" and act.token = '%s'", delta, upstring, expired, terminalId, accessToken))
+			log.Println(sbTerm.String())
+		}
+		if credentialUsage {
+			sbTerm.WriteString(fmt.Sprintf("UPDATE credentialusage AS cu, accesstoken AS act"+
+				" SET act.timeout = %d, cu.updated = '%s', cu.expired = %d"+
+				" WHERE act.credentialusage_credentialusageid = cu.credentialusageid AND cu.terminal_terminalid = '%s'"+
+				" AND act.token = '%s'", delta, upstring, expired, terminalId, accessToken))
+			log.Println(sbTerm.String())
+		}
 
 		_, err = Exec(sbTerm.String())
 		if err != nil {
@@ -614,6 +676,14 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 	ke := sha256.Sum256([]byte(uuid.New().String()))
 	sbEkey.WriteString(string(ke[:]))
 
+	terminalVerified, err := VerifyTerminal(terminalId)
+	if err != nil {
+		return
+	}
+	if !terminalVerified {
+		return
+	}
+
 	accessToken := base64.StdEncoding.EncodeToString([]byte(sbAkey.String()))
 	refreshToken := base64.StdEncoding.EncodeToString([]byte(sbEkey.String()))
 
@@ -653,8 +723,8 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		// INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `date`)
 		// VALUES ('%s', '%s', '%s');
 
-		sbQkey.WriteString(fmt.Sprintf("INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `date`)"+
-			"VALUES ('%s', '%s', '%s')", grant.ClientId, terminalId, time.Now().Format("2006-01-02 15:04:05")))
+		sbQkey.WriteString(fmt.Sprintf("INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `created`, `expired`)"+
+			"VALUES ('%s', '%s', '%s', 0)", grant.ClientId, terminalId, time.Now().Format("2006-01-02 15:04:05")))
 		result, err := Exec(sbQkey.String())
 		if err != nil {
 			return response, err
@@ -672,10 +742,11 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		queryAccess = sbQkey.String()
 		sbQkey.Reset()
 
+		// FIXME INI MENGHASILKAN QUERY KOSONG.
 		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
 		(token, timeout, used, credentialusage_credentialusageid)
 		VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, credentialusageUsageid))
-		queryAccess = sbQkey.String()
+		queryRefresh = sbQkey.String()
 		// insert into credentialusage (clientcredential_clientid, terminal_terminalid, date)
 		// values ('%s', '%s', '%s')
 	} else {
@@ -714,13 +785,13 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		queryRefresh = sbQkey.String()
 
 	}
-	fmt.Println(queryAccess)
+	log.Println(queryAccess)
 	_, err = Exec(queryAccess)
 	if err != nil {
 		return
 	}
 
-	fmt.Println(queryRefresh)
+	log.Println(queryRefresh)
 	_, err = Exec(queryRefresh)
 	if err != nil {
 		return
@@ -735,17 +806,17 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 }
 
 func FetchToken(terminalId string, grant Grant) (response TokenResponse, err error) {
-	var t time.Time
+	// var t time.Time
 	var sbQToken strings.Builder
 	var responses []TokenResponse
 
-	t = time.Now()
-	year, month, day := t.Date()
-	RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
-	RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
+	// t = time.Now()
+	// year, month, day := t.Date()
+	// RangeStart := time.Date(year, month, day, 0, 0, 0, 0, t.Location())
+	// RangeEnd := time.Date(year, month, day, 23, 59, 59, 0, t.Location())
 
-	startString := RangeStart.Format("2006-01-02 15:04:05")
-	endString := RangeEnd.Format("2006-01-02 15:04:05")
+	// startString := RangeStart.Format("2006-01-02 15:04:05")
+	// endString := RangeEnd.Format("2006-01-02 15:04:05")
 
 	sbQToken.WriteString(fmt.Sprintf(`select
 	act.token as access_token,
@@ -754,9 +825,9 @@ func FetchToken(terminalId string, grant Grant) (response TokenResponse, err err
 from tokenusage as tu
 join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
 join accesstoken as act on act.tokenusage_usageid = tu.usageid
-where `+"`created`"+` between '%s' and '%s'
+where tu.expired = 0
 and tu.terminal_terminalid = '%s' and tu.user_uname = '%s'`,
-		startString, endString, terminalId, grant.Username))
+		terminalId, grant.Username))
 
 	fmt.Println(sbQToken.String())
 

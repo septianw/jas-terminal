@@ -166,7 +166,7 @@ func PostLoginFunc(c *gin.Context) {
 	var user usr.UserIn
 	// var usersOut []usr.UserOut
 	var err error
-	var passVerified, clientVerified, refreshTokenVerified bool
+	var passVerified, clientVerified, terminalVerified, refreshTokenVerified bool
 	var tokenResponse term.TokenResponse
 	var terminal string
 
@@ -179,6 +179,17 @@ func PostLoginFunc(c *gin.Context) {
 	log.Printf("%+v", grant)
 
 	// c.JSON(http.StatusOK, gin.H{"message": "Pew pew pew."})
+
+	terminal = c.GetHeader("X-terminal")
+	terminalVerified, err = term.VerifyTerminal(terminal)
+	if err != nil {
+		common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
+		return
+	}
+	if !terminalVerified {
+		common.SendHttpError(c, common.FORBIDDEN_CODE, errors.New("Terminal id invalid."))
+		return
+	}
 
 	switch grant.GrantType {
 	case "password":
@@ -209,7 +220,6 @@ func PostLoginFunc(c *gin.Context) {
 
 		if passVerified && clientVerified {
 			// terminal := c.MustGet("terminal").(string)
-			terminal = c.GetHeader("X-terminal")
 			tokenResponse, err = term.IssueTokens(terminal, grant)
 			if err != nil {
 				// FIXME: cek, apakah error code ini sudah benar atau belum.
@@ -234,7 +244,6 @@ func PostLoginFunc(c *gin.Context) {
 		}
 
 		clientVerified, err = term.VerifyClients(grant.ClientId, grant.ClientSecret)
-		terminal = c.GetHeader("X-terminal")
 		if err != nil {
 			// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
 			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)
@@ -282,7 +291,6 @@ func PostLoginFunc(c *gin.Context) {
 
 		clientVerified, err := term.VerifyClients(grant.ClientId, grant.ClientSecret)
 		log.Printf("\nVerified: %+v\nerr: %+v\n", clientVerified, err)
-		terminal = c.GetHeader("X-terminal")
 		if err != nil {
 			// FIXME: ini harusnya bukan database exec fail tapi ditulis begini untuk placeholder.
 			common.SendHttpError(c, common.DATABASE_EXEC_FAIL_CODE, err)

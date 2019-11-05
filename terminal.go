@@ -525,18 +525,57 @@ func VerifyAccessToken(accessToken, terminalId string) (verified bool, err error
 
 func VerifyRefreshToken(refreshToken, terminalId string) (verified bool, err error) {
 	var sbTerm strings.Builder
-	// var count uint64
+	var count uint64 = 0
+	var token sql.NullString
+	var timeout, used, tokenusageUsageid, cuCredentialUsageid sql.NullInt64
+	var tokenUsage, credentialUsage bool = false, false
 	verified = false
 
-	// get valid refresh token associated with
-	_, err = sbTerm.WriteString(fmt.Sprintf(`SELECT COUNT(*) AS count
-FROM tokenusage AS tu
-JOIN refreshtoken AS rt ON rt.tokenusage_usageid = tu.usageid
-WHERE tu.terminal_terminalid = '%s' AND tu.expired = 0 AND rt.token = '%s'`,
-		terminalId, refreshToken))
+	sbTerm.WriteString(fmt.Sprintf(`select (
+		select count(*) from refreshtoken where token = '%s'
+	) as count, token, timeout, used, tokenusage_usageid, credentialusage_credentialusageid
+	from refreshtoken where token = '%s'`,
+		refreshToken, refreshToken))
+	rows, err := Query(sbTerm.String())
+
 	if err != nil {
 		return
 	}
+
+	for rows.Next() {
+		rows.Scan(&count, &token, &timeout, &used, &tokenusageUsageid, &cuCredentialUsageid)
+	}
+
+	if count == 0 {
+		err = errors.New("Access token not found.")
+		return
+	} else if tokenusageUsageid.Valid {
+		// get valid access token associated with
+		tokenUsage = true
+		sbTerm.Reset()
+		_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
+		from tokenusage as tu
+		join refreshtoken as rt on rt.tokenusage_usageid = tu.usageid
+		where tu.terminal_terminalid = '%s' and tu.expired = 0 AND rt.token = '%s'`,
+			terminalId, refreshToken))
+		if err != nil {
+			return
+		}
+	} else if cuCredentialUsageid.Valid {
+		// get valid access token associated with
+		credentialUsage = true
+		sbTerm.Reset()
+		_, err = sbTerm.WriteString(fmt.Sprintf(`select COUNT(*) as count
+		from credentialusage as cu
+		join refreshtoken as rt on rt.credentialusage_credentialusageid = cu.credentialusageid
+		where cu.terminal_terminalid = '%s' and cu.expired = 0 AND rt.token = '%s'`,
+			terminalId, refreshToken))
+		if err != nil {
+			return
+		}
+	}
+
+	fmt.Println(sbTerm.String())
 
 	// FIXME
 	return verify(sbTerm, func() error {
@@ -548,16 +587,32 @@ WHERE tu.terminal_terminalid = '%s' AND tu.expired = 0 AND rt.token = '%s'`,
 		var expired uint8 = 0
 		t := time.Now()
 
-		sbTerm.Reset()
-		sbTerm.WriteString(fmt.Sprintf(`SELECT tu.usageid, rt.timeout, tu.created, tu.updated
-		FROM tokenusage AS tu
-		JOIN refreshtoken AS rt ON rt.tokenusage_usageid = tu.usageid
-		WHERE tu.terminal_terminalid = '%s'
-		AND rt.token = '%s'`, terminalId, refreshToken))
-		log.Println(sbTerm.String())
-		rows, err := Query(sbTerm.String())
-		if err != nil {
-			return err
+		if tokenUsage {
+			sbTerm.Reset()
+			sbTerm.WriteString(fmt.Sprintf(`SELECT tu.usageid, rt.timeout, tu.created, tu.updated
+			FROM tokenusage AS tu
+			JOIN refreshtoken AS rt ON rt.tokenusage_usageid = tu.usageid
+			WHERE tu.terminal_terminalid = '%s'
+			AND rt.token = '%s'`, terminalId, refreshToken))
+			log.Println(sbTerm.String())
+			rows, err = Query(sbTerm.String())
+			if err != nil {
+				return err
+			}
+		}
+
+		if credentialUsage {
+			sbTerm.Reset()
+			sbTerm.WriteString(fmt.Sprintf(`SELECT cu.credentialusageid, rt.timeout, cu.created, cu.updated
+			FROM credentialusage AS cu
+			JOIN refreshtoken AS rt ON rt.credentialusage_credentialusageid = cu.credentialusageid
+			WHERE cu.terminal_terminalid = '%s' AND cu.expired = 0 AND rt.token = '%s'`,
+				terminalId, refreshToken))
+			log.Println(sbTerm.String())
+			rows, err = Query(sbTerm.String())
+			if err != nil {
+				return err
+			}
 		}
 
 		for rows.Next() {
@@ -591,8 +646,8 @@ WHERE tu.terminal_terminalid = '%s' AND tu.expired = 0 AND rt.token = '%s'`,
 			log.Printf("\nage: %+v, tokenAge: %+v, created: %+v, timeout: %+v, now: %+v", age.Seconds(), tokenAge, tCreated.Unix(), timeout, t.Unix())
 			deltaDur := tokenAge.Sub(time.Now())
 			log.Printf("\ntokenage - t: %+v\n", deltaDur.Hours())
-			if int64(deltaDur.Seconds()) > 259200 {
-				delta = 259200
+			if int64(deltaDur.Seconds()) > 86400 {
+				delta = 86400
 			} else {
 				delta = int64(deltaDur.Seconds())
 			}
@@ -602,11 +657,20 @@ WHERE tu.terminal_terminalid = '%s' AND tu.expired = 0 AND rt.token = '%s'`,
 		}
 		log.Println(delta)
 
-		sbTerm.WriteString(fmt.Sprintf("update tokenusage as tu, refreshtoken as rt"+
-			" set rt.timeout = %d, tu.updated = '%s', tu.expired = %d"+
-			" where tu.usageid = rt.tokenusage_usageid and tu.terminal_terminalid = '%s'"+
-			" and rt.token = '%s'", delta, upstring, expired, terminalId, refreshToken))
-		log.Println(sbTerm.String())
+		if tokenUsage {
+			sbTerm.WriteString(fmt.Sprintf("update tokenusage as tu, refreshtoken as rt"+
+				" set rt.timeout = %d, tu.updated = '%s', tu.expired = %d"+
+				" where tu.usageid = rt.tokenusage_usageid and tu.terminal_terminalid = '%s'"+
+				" and rt.token = '%s'", delta, upstring, expired, terminalId, refreshToken))
+			log.Println(sbTerm.String())
+		}
+		if credentialUsage {
+			sbTerm.WriteString(fmt.Sprintf("UPDATE credentialusage AS cu, refreshtoken AS rt"+
+				" SET rt.timeout = %d, cu.updated = '%s', cu.expired = %d"+
+				" WHERE rt.credentialusage_credentialusageid = cu.credentialusageid AND cu.terminal_terminalid = '%s'"+
+				" AND rt.token = '%s'", delta, upstring, expired, terminalId, refreshToken))
+			log.Println(sbTerm.String())
+		}
 
 		_, err = Exec(sbTerm.String())
 		if err != nil {

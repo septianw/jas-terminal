@@ -65,7 +65,7 @@ func MiddleFunc() gin.HandlerFunc {
 				return
 			} else {
 				// ini masuk ke tempat lain
-				common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
+				common.SendHttpError(c, common.FORBIDDEN_CODE,
 					errors.New("Authorization required. Please login first."))
 				c.Abort()
 				return
@@ -86,8 +86,8 @@ func MiddleFunc() gin.HandlerFunc {
 			if accessTokenVerified, err = term.VerifyAccessToken(strings.Split(h.Authorization, " ")[1], h.Terminal); !accessTokenVerified {
 				log.Printf("\n%+v\n", err)
 				log.Printf("\n%+v\n", accessTokenVerified)
-				common.SendHttpError(c, common.INPUT_VALIDATION_FAIL_CODE,
-					errors.New("Terminal not registered. Please contact authorized officer to register your terminal."))
+				common.SendHttpError(c, common.FORBIDDEN_CODE,
+					errors.New("Invalid access token."))
 				c.Abort()
 				return
 			}
@@ -97,8 +97,7 @@ func MiddleFunc() gin.HandlerFunc {
 		if terminalVerified && accessTokenVerified {
 			c.Next()
 		} else {
-			// FIXME: harusnya ini forbidden.
-			common.SendHttpError(c, common.NOT_ACCEPTABLE_CODE, errors.New("Harusnya ini forbidden."))
+			common.SendHttpError(c, common.FORBIDDEN_CODE, errors.New("Unauthorized access."))
 			c.Abort()
 		}
 

@@ -787,6 +787,7 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		// INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `date`)
 		// VALUES ('%s', '%s', '%s');
 
+		// ini untuk yang access token
 		sbQkey.WriteString(fmt.Sprintf("INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `created`, `expired`)"+
 			"VALUES ('%s', '%s', '%s', 0)", grant.ClientId, terminalId, time.Now().Format("2006-01-02 15:04:05")))
 		result, err := Exec(sbQkey.String())
@@ -806,7 +807,20 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		queryAccess = sbQkey.String()
 		sbQkey.Reset()
 
-		// FIXME INI MENGHASILKAN QUERY KOSONG.
+		// ini untuk yang refresh token
+		sbQkey.WriteString(fmt.Sprintf("INSERT INTO credentialusage (clientcredential_clientid, terminal_terminalid, `created`, `expired`)"+
+			"VALUES ('%s', '%s', '%s', 0)", grant.ClientId, terminalId, time.Now().Format("2006-01-02 15:04:05")))
+		result, err = Exec(sbQkey.String())
+		if err != nil {
+			return response, err
+		}
+
+		credentialusageUsageid, err = result.LastInsertId()
+		if err != nil {
+			return response, err
+		}
+		sbQkey.Reset()
+
 		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
 		(token, timeout, used, credentialusage_credentialusageid)
 		VALUES ('%s', %d, 1, %d)`, refreshToken, refreshTokenExpired, credentialusageUsageid))
@@ -820,6 +834,7 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		log.Printf("\n%+v\n", users)
 		log.Println(accessToken, refreshToken)
 
+		// ini untuk yang access token
 		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage
 		(user_uid, user_uname, terminal_terminalid, created)
 		VALUES (%d, '%s', '%s', '%s')`,
@@ -842,6 +857,24 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		VALUES ('%s', %d, 1, %d)`, accessToken, accessTokenExpired, tokenUsageId))
 		queryAccess = sbQkey.String()
 		sbQkey.Reset()
+
+		// ini untuk refresh token.
+		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage
+		(user_uid, user_uname, terminal_terminalid, created)
+		VALUES (%d, '%s', '%s', '%s')`,
+			users[0].Uid, users[0].Uname, terminalId, time.Now().Format("2006-01-02 15:04:05")))
+		qTokenUsage = sbQkey.String()
+		fmt.Println(qTokenUsage)
+		result, err = Exec(qTokenUsage)
+		if err != nil {
+			return response, err
+		}
+		tokenUsageId, err = result.LastInsertId()
+		if err != nil {
+			return response, err
+		}
+		sbQkey.Reset()
+		log.Println(tokenUsageId)
 
 		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO refreshtoken
 		(token, timeout, used, tokenusage_usageid)

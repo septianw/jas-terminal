@@ -722,7 +722,7 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 	var sbAkey, sbEkey, sbQkey strings.Builder
 	var tokenUsageId int64
-	var queryAccess, queryRefresh string
+	var queryAccess, queryRefresh, contacttype string
 
 	accessTokenExpired := (60 * 60 * 24)
 	refreshTokenExpired := (60 * 60 * 24 * 3)
@@ -833,6 +833,28 @@ WHERE rt.tokenusage_usageid = tu.usageid AND rt.token = '%s'`, grant.RefreshToke
 		log.Println(err)
 		log.Printf("\n%+v\n", users)
 		log.Println(accessToken, refreshToken)
+
+		sbQkey.WriteString(fmt.Sprintf(`SELECT ct.`+"`name`"+` AS contacttype FROM user AS u
+JOIN contact AS c ON c.contactid = u.contact_contactid
+JOIN contactwtype AS cwt ON c.contactid = cwt.contact_contactid
+JOIN contacttype AS ct ON ct.ctypeid = cwt.contacttype_ctypeid
+WHERE u.uid = '%d'`, users[0].Uid))
+		log.Println(sbQkey.String())
+		rows, err := Query(sbQkey.String())
+		common.ErrHandler(err)
+		for rows.Next() {
+			rows.Scan(&contacttype)
+		}
+
+		switch contacttype {
+		case "chef":
+			response.Scope = "kitchen"
+		case "cashier":
+			response.Scope = "cashier"
+		default:
+			response.Scope = ""
+		}
+		sbQkey.Reset()
 
 		// ini untuk yang access token
 		sbQkey.WriteString(fmt.Sprintf(`INSERT INTO tokenusage

@@ -467,36 +467,44 @@ func VerifyAccessToken(accessToken, terminalId string) (verified bool, err error
 		rows.Close()
 		sbTerm.Reset()
 
-		tCreated, err := time.Parse("2006-01-02T15:04:05Z", created)
+		tCreated, err := time.Parse("2006-01-02 15:04:05", created)
 		if err != nil {
 			return err
 		}
 
 		upstring = t.Format("2006-01-02 15:04:05")
 
+		delta = timeout - (t.Unix() - tCreated.Unix())
+		if delta < 0 {
+			expired = 1
+		}
+
+		// NOTE: stash this.
 		// ini masih pakai unix timestamp
 		// asumsinya timeout itu far future.
-		log.Println(time.Unix(timeout, 0).Format("2006"))
-		if strings.Compare(time.Unix(timeout, 0).Format("2006"), "2019") == 0 {
-			delta = timeout - t.Unix()
-			if delta < 0 {
-				expired = 1
-			}
-		} else {
-			age := t.Sub(tCreated)
-			tokenAge := tCreated.Add(time.Duration(timeout) * time.Second)
-			log.Printf("\nage: %+v, tokenAge: %+v, created: %+v, timeout: %+v, now: %+v", age.Seconds(), tokenAge, tCreated.Unix(), timeout, t.Unix())
-			deltaDur := tokenAge.Sub(time.Now())
-			log.Printf("\ntokenage - t: %+v\n", deltaDur.Hours())
-			if int64(deltaDur.Seconds()) > 86400 {
-				delta = 86400
-			} else {
-				delta = int64(deltaDur.Seconds())
-			}
-			if delta <= 0 {
-				expired = 1
-			}
-		}
+		// log.Println(time.Unix(timeout, 0).Format("2006"))
+		// timeoutUnix = timeout + time.Now().Unix()
+		// // this block below check if timeout is near
+		// if strings.Compare(time.Unix(timeoutUnix, 0).Format("2006"), t.Format("2006")) == 0 {
+		// 	delta = timeout - t.Unix()
+		// 	if delta < 0 {
+		// 		expired = 1
+		// 	}
+		// } else {
+		// 	age := t.Sub(tCreated)
+		// 	tokenAge := tCreated.Add(time.Duration(timeout) * time.Second)
+		// 	log.Printf("\nage: %+v, tokenAge: %+v, created: %+v, timeout: %+v, now: %+v", age.Seconds(), tokenAge, tCreated.Unix(), timeout, t.Unix())
+		// 	deltaDur := tokenAge.Sub(time.Now())
+		// 	log.Printf("\ntokenage - t: %+v\n", deltaDur.Hours())
+		// 	if int64(deltaDur.Seconds()) > 86400 {
+		// 		delta = 86400
+		// 	} else {
+		// 		delta = int64(deltaDur.Seconds())
+		// 	}
+		// 	if delta <= 0 {
+		// 		expired = 1
+		// 	}
+		// }
 		log.Println(delta)
 
 		if tokenUsage {
@@ -724,11 +732,11 @@ func GenerateTokens(terminalId string, grant Grant) (response TokenResponse, err
 	var tokenUsageId int64
 	var queryAccess, queryRefresh, contacttype string
 
-	accessTokenExpired := (60 * 60 * 24)
-	refreshTokenExpired := (60 * 60 * 24 * 3)
+	accessTokenExpired := ((60 * 60) * 24) * time.Second
+	refreshTokenExpired := (((60 * 60) * 24) * 3) * time.Second
 
-	accessExpired := fmt.Sprintf("%d", accessTokenExpired)
-	refreshExpired := fmt.Sprintf("%d", refreshTokenExpired)
+	accessExpired := fmt.Sprintf("%d", accessTokenExpired.Nanoseconds())
+	refreshExpired := fmt.Sprintf("%d", refreshTokenExpired.Nanoseconds())
 
 	sbAkey.WriteString(accessExpired)
 	sbAkey.WriteString("$")

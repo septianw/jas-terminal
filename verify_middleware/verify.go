@@ -45,6 +45,9 @@ func MiddleFunc() gin.HandlerFunc {
 		log.Println(c.Request.URL.String())
 		// log.Println("wii woo wii woo")
 		c.Set("middleware", "loaded")
+		if strings.Compare(c.Request.URL.String(), "/ui/v1/proxy") == 0 {
+			c.Next()
+		}
 		segments = strings.Split(c.Request.URL.String(), "/")
 		log.Printf("\n%+v\n", segments)
 
@@ -93,6 +96,7 @@ func MiddleFunc() gin.HandlerFunc {
 			}
 		}
 		c.Set("accessToken", strings.Split(h.Authorization, " ")[1])
+		log.Println(c.Request.URL.Path)
 
 		if terminalVerified && accessTokenVerified {
 			c.Next()

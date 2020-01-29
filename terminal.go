@@ -467,7 +467,8 @@ func VerifyAccessToken(accessToken, terminalId string) (verified bool, err error
 		rows.Close()
 		sbTerm.Reset()
 
-		tCreated, err := time.Parse("2006-01-02 15:04:05", created)
+		// this line is required.
+		tCreated, err := time.Parse("2006-01-02T15:04:05Z", created)
 		if err != nil {
 			return err
 		}
